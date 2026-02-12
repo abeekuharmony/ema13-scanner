@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  ema13-scanner:
+    build: .
+    container_name: ema13-scanner
+    restart: unless-stopped
+    env_file:
+      - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
