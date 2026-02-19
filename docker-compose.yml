@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   ema13-scanner:
     build: .
