@@ -3,89 +3,78 @@ import logging
 import httpx
 
 from scanner.config import settings
-from scanner.indicators import CrossSignal, CrossType
+from scanner.indicators import Signal
 
 logger = logging.getLogger(__name__)
 
-CROSS_LABELS = {
-    CrossType.BODY_CROSS_UP: "BULLISH BODY CROSS",
-    CrossType.BODY_CROSS_DOWN: "BEARISH BODY CROSS",
-    CrossType.WICK_CROSS_UP: "BULLISH WICK PIERCE",
-    CrossType.WICK_CROSS_DOWN: "BEARISH WICK PIERCE",
-}
 
-CROSS_EMOJI = {
-    CrossType.BODY_CROSS_UP: "\U0001f7e2",   # green circle
-    CrossType.BODY_CROSS_DOWN: "\U0001f534",  # red circle
-    CrossType.WICK_CROSS_UP: "\U0001f7e1",    # yellow circle
-    CrossType.WICK_CROSS_DOWN: "\U0001f7e0",  # orange circle
-}
-
-DIRECTION_ARROW = {
-    CrossType.BODY_CROSS_UP: "\u2191",    # up arrow
-    CrossType.BODY_CROSS_DOWN: "\u2193",  # down arrow
-    CrossType.WICK_CROSS_UP: "\u2191",
-    CrossType.WICK_CROSS_DOWN: "\u2193",
-}
+def _fmt_symbol(symbol: str, source: str) -> str:
+    """Convert internal symbol to a clean display name."""
+    if source == "mexc":
+        return symbol.replace("_", "/") + " (Perp)"
+    return symbol  # Twelve Data symbols are already like EUR/USD
 
 
-def format_signal(signal: CrossSignal) -> str:
-    """Format a single CrossSignal into an HTML message block."""
-    emoji = CROSS_EMOJI.get(signal.cross_type, "")
-    label = CROSS_LABELS.get(signal.cross_type, signal.cross_type.value)
-    arrow = DIRECTION_ARROW.get(signal.cross_type, "")
-    source_tag = signal.source.upper()
-
-    # Format price with appropriate decimal places
-    if signal.price_close >= 100:
-        price_fmt = f"{signal.price_close:,.2f}"
-        ema_fmt = f"{signal.ema_value:,.2f}"
+def _fmt_price(price: float) -> str:
+    if price >= 100:
+        return f"{price:,.2f}"
+    elif price >= 1:
+        return f"{price:.4f}"
     else:
-        price_fmt = f"{signal.price_close:.4f}"
-        ema_fmt = f"{signal.ema_value:.4f}"
+        return f"{price:.6f}"
+
+
+def format_signal(signal: Signal) -> str:
+    """Format a single Signal into an HTML Telegram message block."""
+    emoji   = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
+    arrow   = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
+    sym     = _fmt_symbol(signal.symbol, signal.source)
+    close_s = _fmt_price(signal.close_price)
+    e5_s    = _fmt_price(signal.ema5)
+    e13_s   = _fmt_price(signal.ema13)
+    e62_s   = _fmt_price(signal.ema62)
 
     return (
-        f"{emoji} <b>{signal.symbol}</b> [{source_tag}] {arrow}\n"
-        f"    {label}\n"
-        f"    Close: {price_fmt} | EMA{settings.ema_period}: {ema_fmt}"
+        f"{emoji} <b>{sym}</b>  {arrow}\n"
+        f"    Close: {close_s}\n"
+        f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}"
     )
 
 
-def build_alert_message(signals: list[CrossSignal]) -> str:
-    """Build the full Telegram alert message from a list of signals."""
+def build_alert_message(signals: list[Signal]) -> str:
     if not signals:
         return ""
 
+    buys  = [s for s in signals if s.direction == "BUY"]
+    sells = [s for s in signals if s.direction == "SELL"]
+
     header = (
-        f"<b>EMA{settings.ema_period} Cross Alert</b>\n"
-        f"<i>{len(signals)} signal(s) on 1H timeframe</i>\n"
-        + "\u2500" * 25
-        + "\n\n"
+        "<b>5/13/62 Signal Alert</b>\n"
+        f"<i>{len(signals)} signal(s) on 1H timeframe"
+        f" — {len(buys)} BUY / {len(sells)} SELL</i>\n"
+        + "─" * 25 + "\n\n"
     )
-    body = "\n\n".join(format_signal(s) for s in signals)
+
+    # Show BUYs first, then SELLs
+    ordered = buys + sells
+    body = "\n\n".join(format_signal(s) for s in ordered)
     return header + body
 
 
 async def send_telegram_message(text: str) -> bool:
-    """
-    Send a message via Telegram Bot HTTP API.
-    Handles messages > 4096 chars by splitting.
-    Returns True on success.
-    """
+    """Send a message via Telegram Bot API. Splits if > 4096 chars."""
     if not text or not settings.telegram_bot_token:
         return False
 
-    url = (
-        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     chunks = _split_message(text, max_length=4096)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for chunk in chunks:
             payload = {
-                "chat_id": settings.telegram_chat_id,
-                "text": chunk,
-                "parse_mode": "HTML",
+                "chat_id":                  settings.telegram_chat_id,
+                "text":                     chunk,
+                "parse_mode":               "HTML",
                 "disable_web_page_preview": True,
             }
             try:
@@ -103,7 +92,6 @@ async def send_telegram_message(text: str) -> bool:
 
 
 def _split_message(text: str, max_length: int = 4096) -> list[str]:
-    """Split a long message into chunks that fit Telegram's limit."""
     if len(text) <= max_length:
         return [text]
 
@@ -120,10 +108,9 @@ def _split_message(text: str, max_length: int = 4096) -> list[str]:
     return chunks
 
 
-async def send_alerts(signals: list[CrossSignal]) -> None:
-    """High-level: format signals and send via Telegram."""
+async def send_alerts(signals: list[Signal]) -> None:
     if not signals:
-        logger.info("No EMA cross signals detected this scan.")
+        logger.info("No signals detected this scan.")
         return
 
     message = build_alert_message(signals)

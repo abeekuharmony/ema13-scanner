@@ -1,118 +1,155 @@
-from enum import Enum
 from dataclasses import dataclass
 
 import pandas as pd
 
 
-class CrossType(str, Enum):
-    BODY_CROSS_UP = "body_cross_up"
-    BODY_CROSS_DOWN = "body_cross_down"
-    WICK_CROSS_UP = "wick_cross_up"
-    WICK_CROSS_DOWN = "wick_cross_down"
-
-
 @dataclass
-class CrossSignal:
+class Signal:
     symbol: str
-    cross_type: CrossType
-    price_close: float
-    ema_value: float
-    timeframe: str
-    source: str  # "binance" or "twelvedata"
+    direction: str      # "BUY" or "SELL"
+    source: str         # "mexc" or "twelvedata"
+    close_price: float
+    ema5: float
+    ema13: float
+    ema62: float
 
 
-def calculate_ema(df: pd.DataFrame, period: int = 13) -> pd.DataFrame:
-    """Add EMA column to DataFrame. Expects a 'close' column."""
+def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 62) -> pd.DataFrame:
+    """Add e5, e13, e62 EMA columns to DataFrame. Expects a 'close' column."""
     df = df.copy()
-    df["ema"] = df["close"].ewm(span=period, adjust=False).mean()
+    df["e5"]  = df["close"].ewm(span=fast, adjust=False).mean()
+    df["e13"] = df["close"].ewm(span=mid,  adjust=False).mean()
+    df["e62"] = df["close"].ewm(span=slow, adjust=False).mean()
     return df
 
 
-def detect_crosses(
-    df: pd.DataFrame, symbol: str, source: str, timeframe: str = "1h"
-) -> list[CrossSignal]:
+def calculate_megatrend(
+    df: pd.DataFrame,
+    atr_len: int = 14,
+    smooth_len: int = 14,
+    r_mult: float = 2.5,
+    breakout_len: int = 2,
+) -> pd.DataFrame:
     """
-    Detect EMA13 crosses on the last two candles.
+    Custom ATR Breakout Megatrend (replicates PineScript 'Custom approximation' mode).
 
-    Expects DataFrame with columns: open, high, low, close, ema
-    sorted chronologically (oldest first). Only examines the last
-    two rows (previous candle + current candle).
+    Source: hl2 (high + low) / 2
+    Bands:  EMA(hl2, smooth_len)  ±  ATR(atr_len, Wilder) * r_mult
+    mt_bull: close above upper band for ALL of the last breakout_len bars
+    mt_bear: close below lower band for ALL of the last breakout_len bars
 
-    Body cross takes priority over wick cross to avoid duplicates.
+    PineScript ta.atr() uses Wilder's smoothing (com = period - 1).
+    PineScript ta.ema() uses standard EMA (span = period).
     """
-    signals: list[CrossSignal] = []
+    df = df.copy()
+    df["hl2"] = (df["high"] + df["low"]) / 2.0
 
-    if len(df) < 2:
-        return signals
+    # True Range
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"]  - prev_close).abs(),
+    ], axis=1).max(axis=1)
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
+    # Wilder's ATR (matches PineScript ta.atr)
+    df["_atr"] = tr.ewm(com=atr_len - 1, adjust=False).mean()
 
-    prev_close = prev["close"]
-    prev_ema = prev["ema"]
-    curr_close = curr["close"]
-    curr_ema = curr["ema"]
-    curr_high = curr["high"]
-    curr_low = curr["low"]
+    # EMA of hl2 (standard EMA, matches PineScript ta.ema)
+    df["_mt_smooth"] = df["hl2"].ewm(span=smooth_len, adjust=False).mean()
 
-    # --- Body Cross (Close Cross) ---
-    # Cross Up: previous close was at or below EMA, current close is above
-    if prev_close <= prev_ema and curr_close > curr_ema:
-        signals.append(
-            CrossSignal(
-                symbol=symbol,
-                cross_type=CrossType.BODY_CROSS_UP,
-                price_close=curr_close,
-                ema_value=curr_ema,
-                timeframe=timeframe,
-                source=source,
-            )
+    df["_mt_upper"] = df["_mt_smooth"] + df["_atr"] * r_mult
+    df["_mt_lower"] = df["_mt_smooth"] - df["_atr"] * r_mult
+
+    above = (df["close"] > df["_mt_upper"]).astype(float)
+    below = (df["close"] < df["_mt_lower"]).astype(float)
+
+    # All of the last breakout_len bars must satisfy the condition
+    df["mt_bull"] = above.rolling(breakout_len).min().fillna(0).astype(bool)
+    df["mt_bear"] = below.rolling(breakout_len).min().fillna(0).astype(bool)
+
+    return df.drop(columns=["_atr", "_mt_smooth", "_mt_upper", "_mt_lower"])
+
+
+def detect_signal(
+    df: pd.DataFrame,
+    symbol: str,
+    source: str,
+    fast: int = 5,
+    mid: int = 13,
+    slow: int = 62,
+    atr_len: int = 14,
+    smooth_len: int = 14,
+    r_mult: float = 2.5,
+    breakout_len: int = 2,
+) -> Signal | None:
+    """
+    Evaluate the 5/13/62 EMA Cloud + Megatrend signal on the last CLOSED candle.
+
+    Candle layout after fetching with limit=100 at HH:01:
+      df.iloc[-1]  — forming (in-progress) candle, skipped
+      df.iloc[-2]  — curr: last fully closed candle  ← signal evaluated here
+      df.iloc[-3]  — prev: candle before curr
+
+    Returns a Signal (BUY or SELL) or None if no signal fires.
+    """
+    min_rows = slow + atr_len + breakout_len + 3
+    if len(df) < min_rows:
+        return None
+
+    df = calculate_emas(df, fast, mid, slow)
+    df = calculate_megatrend(df, atr_len, smooth_len, r_mult, breakout_len)
+
+    if len(df) < 3:
+        return None
+
+    # Skip df.iloc[-1] (potentially forming candle)
+    prev = df.iloc[-3]
+    curr = df.iloc[-2]
+
+    # ── EMA Cloud ────────────────────────────────────────────────────────
+    # PineScript: ta.crossover(e5, e13) → prev e5 <= e13 AND curr e5 > e13
+    cross_up   = (prev["e5"] <= prev["e13"]) and (curr["e5"] > curr["e13"])
+    cross_down = (prev["e5"] >= prev["e13"]) and (curr["e5"] < curr["e13"])
+
+    ema_bull = (
+        cross_up
+        and curr["e62"] < curr["e5"]
+        and curr["e62"] < curr["e13"]
+        and curr["close"] > curr["e62"]
+    )
+    ema_bear = (
+        cross_down
+        and curr["e62"] > curr["e5"]
+        and curr["e62"] > curr["e13"]
+        and curr["close"] < curr["e62"]
+    )
+
+    # ── Megatrend ────────────────────────────────────────────────────────
+    mt_bull = bool(curr["mt_bull"])
+    mt_bear = bool(curr["mt_bear"])
+
+    # ── Combined signal ──────────────────────────────────────────────────
+    if ema_bull and mt_bull:
+        return Signal(
+            symbol=symbol,
+            direction="BUY",
+            source=source,
+            close_price=float(curr["close"]),
+            ema5=float(curr["e5"]),
+            ema13=float(curr["e13"]),
+            ema62=float(curr["e62"]),
         )
-        return signals
 
-    # Cross Down: previous close was at or above EMA, current close is below
-    if prev_close >= prev_ema and curr_close < curr_ema:
-        signals.append(
-            CrossSignal(
-                symbol=symbol,
-                cross_type=CrossType.BODY_CROSS_DOWN,
-                price_close=curr_close,
-                ema_value=curr_ema,
-                timeframe=timeframe,
-                source=source,
-            )
+    if ema_bear and mt_bear:
+        return Signal(
+            symbol=symbol,
+            direction="SELL",
+            source=source,
+            close_price=float(curr["close"]),
+            ema5=float(curr["e5"]),
+            ema13=float(curr["e13"]),
+            ema62=float(curr["e62"]),
         )
-        return signals
 
-    # --- Wick Cross (Pierce) ---
-    # Current candle straddles EMA (high above, low below)
-    # AND previous candle was entirely on one side (not already straddling)
-    curr_straddles = curr_high > curr_ema and curr_low < curr_ema
-    prev_was_below = prev_close <= prev_ema and prev["high"] <= prev_ema
-    prev_was_above = prev_close >= prev_ema and prev["low"] >= prev_ema
-
-    if curr_straddles:
-        if prev_was_below:
-            signals.append(
-                CrossSignal(
-                    symbol=symbol,
-                    cross_type=CrossType.WICK_CROSS_UP,
-                    price_close=curr_close,
-                    ema_value=curr_ema,
-                    timeframe=timeframe,
-                    source=source,
-                )
-            )
-        elif prev_was_above:
-            signals.append(
-                CrossSignal(
-                    symbol=symbol,
-                    cross_type=CrossType.WICK_CROSS_DOWN,
-                    price_close=curr_close,
-                    ema_value=curr_ema,
-                    timeframe=timeframe,
-                    source=source,
-                )
-            )
-
-    return signals
+    return None

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 import httpx
 import pandas as pd
@@ -8,106 +9,100 @@ from scanner.config import settings
 
 logger = logging.getLogger(__name__)
 
-BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+MEXC_CONTRACT_BASE = "https://contract.mexc.com"
 
 
-async def get_top_binance_futures_symbols(n: int = 25) -> list[str]:
-    """
-    Fetch top N Binance USDS-M Futures pairs by 24h quote volume.
-    Returns raw Binance symbols: ['BTCUSDT', 'ETHUSDT', ...]
-    No API key required for public data.
-    """
-    url = f"{BINANCE_FUTURES_BASE}/fapi/v1/ticker/24hr"
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        tickers = resp.json()
-
-    # Filter for USDT-margined pairs and sort by quote volume
-    usdt_tickers = [
-        t for t in tickers
-        if t["symbol"].endswith("USDT") and float(t.get("quoteVolume", 0)) > 0
-    ]
-    usdt_tickers.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
-
-    return [t["symbol"] for t in usdt_tickers[:n]]
-
-
-async def fetch_binance_ohlcv(
-    symbol: str, interval: str = "1h", limit: int = 50
+async def fetch_mexc_ohlcv(
+    symbol: str, interval: str = "Hour1", limit: int = 100
 ) -> pd.DataFrame | None:
     """
-    Fetch OHLCV data for a single Binance USDS-M Futures symbol via REST.
-    Returns DataFrame with columns: timestamp, open, high, low, close, volume.
+    Fetch OHLCV data for a single MEXC Perpetual Futures symbol.
+    Symbol format: BTC_USDT  (MEXC Contract API format)
+    Returns DataFrame columns: timestamp, open, high, low, close, volume
+    sorted oldest-first.
     """
-    url = f"{BINANCE_FUTURES_BASE}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    # Compute start timestamp: go back far enough for limit hourly candles
+    hours_back = limit + 5  # small buffer
+    start_ts = int(time.time()) - hours_back * 3600
+
+    url = f"{MEXC_CONTRACT_BASE}/api/v1/contract/kline/{symbol}"
+    params = {"interval": interval, "start": start_ts}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
-            raw = resp.json()
+            body = resp.json()
 
-            if not raw:
+            if not body.get("success"):
+                logger.error(f"MEXC kline error for {symbol}: {body}")
                 return None
 
-            # Binance kline format: [open_time, open, high, low, close, volume, ...]
-            df = pd.DataFrame(
-                raw,
-                columns=[
-                    "timestamp", "open", "high", "low", "close", "volume",
-                    "_ct", "_qav", "_nt", "_tbbav", "_tbqav", "_ignore",
-                ],
-            )
-            df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-            for col in ["open", "high", "low", "close", "volume"]:
-                df[col] = df[col].astype(float)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            data = body.get("data", {})
+            times  = data.get("time",  [])
+            opens  = data.get("open",  [])
+            highs  = data.get("high",  [])
+            lows   = data.get("low",   [])
+            closes = data.get("close", [])
+            vols   = data.get("vol",   [])
+
+            if not times:
+                logger.warning(f"MEXC returned empty kline data for {symbol}")
+                return None
+
+            df = pd.DataFrame({
+                "timestamp": pd.to_datetime(times, unit="s", utc=True),
+                "open":   pd.to_numeric(opens,  errors="coerce"),
+                "high":   pd.to_numeric(highs,  errors="coerce"),
+                "low":    pd.to_numeric(lows,   errors="coerce"),
+                "close":  pd.to_numeric(closes, errors="coerce"),
+                "volume": pd.to_numeric(vols,   errors="coerce").fillna(0),
+            })
+
+            df = df.sort_values("timestamp").reset_index(drop=True)
             return df
 
         except Exception as e:
-            logger.error(f"Failed to fetch Binance OHLCV for {symbol}: {e}")
+            logger.error(f"Failed to fetch MEXC OHLCV for {symbol}: {e}")
             return None
 
 
-async def fetch_all_binance(
-    symbols: list[str], interval: str = "1h", limit: int = 50
+async def fetch_all_mexc(
+    symbols: list[str], interval: str = "Hour1", limit: int = 100
 ) -> dict[str, pd.DataFrame]:
     """
-    Fetch OHLCV for multiple Binance symbols concurrently.
-    Uses a semaphore to limit concurrent requests.
+    Fetch OHLCV for multiple MEXC perpetual futures symbols concurrently.
+    Uses a semaphore to avoid hammering the public API.
     """
     semaphore = asyncio.Semaphore(5)
     results: dict[str, pd.DataFrame] = {}
 
     async def _fetch_one(sym: str) -> None:
         async with semaphore:
-            df = await fetch_binance_ohlcv(sym, interval, limit)
+            df = await fetch_mexc_ohlcv(sym, interval, limit)
             if df is not None:
                 results[sym] = df
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
 
     await asyncio.gather(*[_fetch_one(sym) for sym in symbols])
     return results
 
 
 async def fetch_twelvedata_ohlcv(
-    symbol: str, interval: str = "1h", outputsize: int = 50
+    symbol: str, interval: str = "1h", outputsize: int = 100
 ) -> pd.DataFrame | None:
     """
     Fetch OHLCV data from Twelve Data REST API.
-    Returns DataFrame with columns: timestamp, open, high, low, close, volume
+    Returns DataFrame columns: timestamp, open, high, low, close, volume
     sorted oldest-first.
     """
     url = "https://api.twelvedata.com/time_series"
     params = {
-        "symbol": symbol,
-        "interval": interval,
+        "symbol":     symbol,
+        "interval":   interval,
         "outputsize": outputsize,
-        "apikey": settings.twelvedata_api_key,
-        "format": "JSON",
+        "apikey":     settings.twelvedata_api_key,
+        "format":     "JSON",
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -126,16 +121,13 @@ async def fetch_twelvedata_ohlcv(
             df = pd.DataFrame(data["values"])
             for col in ["open", "high", "low", "close"]:
                 df[col] = df[col].astype(float)
-            if "volume" in df.columns:
-                df["volume"] = pd.to_numeric(
-                    df["volume"], errors="coerce"
-                ).fillna(0)
-            else:
-                df["volume"] = 0.0
+            df["volume"] = pd.to_numeric(
+                df.get("volume", 0), errors="coerce"
+            ).fillna(0)
 
             df["timestamp"] = pd.to_datetime(df["datetime"])
             df = df.drop(columns=["datetime"])
-            # Twelve Data returns newest first; reverse to oldest first
+            # Twelve Data returns newest-first; reverse to oldest-first
             df = df.iloc[::-1].reset_index(drop=True)
             return df
 
@@ -145,18 +137,17 @@ async def fetch_twelvedata_ohlcv(
 
 
 async def fetch_all_twelvedata(
-    symbols: list[str], interval: str = "1h", outputsize: int = 50
+    symbols: list[str], interval: str = "1h", outputsize: int = 100
 ) -> dict[str, pd.DataFrame]:
     """
     Fetch OHLCV for multiple Twelve Data symbols sequentially.
-    Respects the free tier rate limit (8 req/min) with 10s delay.
+    Respects free-tier rate limit (8 req/min) with 8s delay between calls.
     """
     results: dict[str, pd.DataFrame] = {}
     for i, sym in enumerate(symbols):
         df = await fetch_twelvedata_ohlcv(sym, interval, outputsize)
         if df is not None:
             results[sym] = df
-        # Rate limit delay (skip after last symbol)
         if i < len(symbols) - 1:
-            await asyncio.sleep(10.0)
+            await asyncio.sleep(8.0)
     return results

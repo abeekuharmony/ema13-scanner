@@ -12,27 +12,46 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # Twelve Data
+    # Twelve Data (Forex / Commodities)
     twelvedata_api_key: str = ""
 
     # Scanner behavior
     scan_interval_minutes: int = 1
-    binance_top_n: int = 25
     log_level: str = "INFO"
+    # Need 62+ candles for EMA62 warmup plus ATR/Megatrend warmup
+    candle_limit: int = 100
 
-    # Twelve Data symbols (forex + commodities + crypto)
-    # Free tier supports: XAU/USD, EUR/USD, GBP/USD, USD/JPY, BTC/USD, ETH/USD
-    # Paid tier adds: XAG/USD, SPX, and more
-    twelvedata_symbols: list[str] = [
-        "XAU/USD",
-        "EUR/USD",
-        "GBP/USD",
-        "USD/JPY",
+    # ── EMA Cloud periods ─────────────────────────────
+    ema_fast: int = 5
+    ema_mid: int = 13
+    ema_slow: int = 62
+
+    # ── Megatrend (Custom ATR Breakout) parameters ───
+    # Source: hl2. Upper/Lower = EMA(hl2, smooth_len) ± ATR(atr_len) * r_mult
+    # Signal fires when close is beyond band for all of the last breakout_len bars.
+    mt_atr_len: int = 14
+    mt_smooth_len: int = 14
+    mt_r_mult: float = 2.5
+    mt_breakout_len: int = 2
+
+    # ── MEXC Perpetual Futures (30 crypto pairs) ─────
+    # Format: BASE_USDT  (matches MEXC Contract API symbol format)
+    mexc_symbols: list[str] = [
+        "BTC_USDT",    "ETH_USDT",    "SOL_USDT",    "XRP_USDT",    "DOGE_USDT",
+        "BNB_USDT",    "ADA_USDT",    "AVAX_USDT",   "DOT_USDT",    "LINK_USDT",
+        "POL_USDT",    "LTC_USDT",    "ATOM_USDT",   "NEAR_USDT",   "APT_USDT",
+        "ARB_USDT",    "OP_USDT",     "SUI_USDT",    "FIL_USDT",    "INJ_USDT",
+        "SEI_USDT",    "TIA_USDT",    "WIF_USDT",    "PEPE_USDT",   "S_USDT",
+        "RENDER_USDT", "AAVE_USDT",   "TON_USDT",    "ORDI_USDT",   "JUP_USDT",
     ]
 
-    # EMA settings
-    ema_period: int = 13
-    candle_limit: int = 50
+    # ── Twelve Data Forex (8 confirmed free-tier pairs) ─
+    # XAG/USD (Silver) requires a paid plan — excluded.
+    # US30/USD (Dow Jones) is not available on Twelve Data — excluded.
+    twelvedata_symbols: list[str] = [
+        "EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD",
+        "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF",
+    ]
 
 
 settings = Settings()
