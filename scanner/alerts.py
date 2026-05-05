@@ -34,10 +34,13 @@ def format_signal(signal: Signal) -> str:
     e13_s   = _fmt_price(signal.ema13)
     e62_s   = _fmt_price(signal.ema62)
 
+    mt_label = "● Bull (Green)" if signal.direction == "BUY" else "● Bear (Red)"
+
     return (
         f"{emoji} <b>{sym}</b>  {arrow}\n"
         f"    Close: {close_s}\n"
-        f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}"
+        f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}\n"
+        f"    Megatrend: {mt_label}"
     )
 
 
