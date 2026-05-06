@@ -26,13 +26,11 @@ class Settings(BaseSettings):
     ema_mid: int = 13
     ema_slow: int = 62
 
-    # ── Megatrend (Custom ATR Breakout) parameters ───
-    # Source: hl2. Upper/Lower = EMA(hl2, smooth_len) ± ATR(atr_len) * r_mult
-    # Signal fires when close is beyond band for all of the last breakout_len bars.
+    # ── Megatrend = Supertrend parameters ────────────
+    # Matches PineScript ta.supertrend(multiplier, atr_len) / 'Simple Supertrend' mode.
+    # Green (bull) when close > trailing lower band. Red (bear) when close < trailing upper band.
     mt_atr_len: int = 14
-    mt_smooth_len: int = 14
-    mt_r_mult: float = 2.5
-    mt_breakout_len: int = 2
+    mt_multiplier: float = 2.5
 
     # ── MEXC Perpetual Futures (30 crypto pairs) ─────
     # Format: BASE_USDT  (matches MEXC Contract API symbol format)

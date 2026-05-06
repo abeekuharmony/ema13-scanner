@@ -39,8 +39,7 @@ async def scan_job() -> None:
                 sig = detect_signal(
                     df, symbol=sym, source="mexc",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                    atr_len=settings.mt_atr_len, smooth_len=settings.mt_smooth_len,
-                    r_mult=settings.mt_r_mult, breakout_len=settings.mt_breakout_len,
+                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
                 )
                 if sig:
                     all_signals.append(sig)
@@ -65,8 +64,7 @@ async def scan_job() -> None:
                     sig = detect_signal(
                         df, symbol=sym, source="twelvedata",
                         fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                        atr_len=settings.mt_atr_len, smooth_len=settings.mt_smooth_len,
-                        r_mult=settings.mt_r_mult, breakout_len=settings.mt_breakout_len,
+                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
                     )
                     if sig:
                         all_signals.append(sig)

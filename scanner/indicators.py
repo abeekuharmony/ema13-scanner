@@ -23,52 +23,77 @@ def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 6
     return df
 
 
-def calculate_megatrend(
+def calculate_supertrend(
     df: pd.DataFrame,
     atr_len: int = 14,
-    smooth_len: int = 14,
-    r_mult: float = 2.5,
-    breakout_len: int = 2,
+    multiplier: float = 2.5,
 ) -> pd.DataFrame:
     """
-    Custom ATR Breakout Megatrend (replicates PineScript 'Custom approximation' mode).
+    Supertrend indicator — matches PineScript ta.supertrend(multiplier, atr_len).
+    This is the 'Simple Supertrend' mode used by the real Megatrend (jaggedsoft/SharkCIA).
 
-    Source: hl2 (high + low) / 2
-    Bands:  EMA(hl2, smooth_len)  ±  ATR(atr_len, Wilder) * r_mult
-    mt_bull: close above upper band for ALL of the last breakout_len bars
-    mt_bear: close below lower band for ALL of the last breakout_len bars
+    The line acts as a trailing ATR stop:
+      - Bullish: close is above the lower band (green Megatrend)
+      - Bearish: close is below the upper band (red Megatrend)
+    Flips direction whenever price crosses the trailing stop line.
+    Always either bull or bear — never neutral — matching observed 3-5 flips/day/symbol.
 
-    PineScript ta.atr() uses Wilder's smoothing (com = period - 1).
-    PineScript ta.ema() uses standard EMA (span = period).
+    mt_bull = True  → Megatrend green (bullish)
+    mt_bear = True  → Megatrend red   (bearish)
     """
     df = df.copy()
-    df["hl2"] = (df["high"] + df["low"]) / 2.0
+    high   = df["high"].values
+    low    = df["low"].values
+    close  = df["close"].values
+    n      = len(df)
 
-    # True Range
-    prev_close = df["close"].shift(1)
-    tr = pd.concat([
+    # Wilder's ATR (com = period - 1  →  alpha = 1/period, matches ta.atr)
+    prev_close = df["close"].shift(1).values
+    tr_vals = pd.concat([
         df["high"] - df["low"],
-        (df["high"] - prev_close).abs(),
-        (df["low"]  - prev_close).abs(),
-    ], axis=1).max(axis=1)
+        (df["high"] - df["close"].shift(1)).abs(),
+        (df["low"]  - df["close"].shift(1)).abs(),
+    ], axis=1).max(axis=1).values
+    atr_series = pd.Series(tr_vals).ewm(com=atr_len - 1, adjust=False).mean().values
 
-    # Wilder's ATR (matches PineScript ta.atr)
-    df["_atr"] = tr.ewm(com=atr_len - 1, adjust=False).mean()
+    hl2          = (high + low) / 2.0
+    basic_upper  = hl2 + multiplier * atr_series
+    basic_lower  = hl2 - multiplier * atr_series
 
-    # EMA of hl2 (standard EMA, matches PineScript ta.ema)
-    df["_mt_smooth"] = df["hl2"].ewm(span=smooth_len, adjust=False).mean()
+    final_upper = [0.0] * n
+    final_lower = [0.0] * n
+    bull        = [True] * n  # True = bullish (green Megatrend)
 
-    df["_mt_upper"] = df["_mt_smooth"] + df["_atr"] * r_mult
-    df["_mt_lower"] = df["_mt_smooth"] - df["_atr"] * r_mult
+    for i in range(n):
+        if i == 0:
+            final_upper[i] = basic_upper[i]
+            final_lower[i] = basic_lower[i]
+            bull[i]        = True
+            continue
 
-    above = (df["close"] > df["_mt_upper"]).astype(float)
-    below = (df["close"] < df["_mt_lower"]).astype(float)
+        # Upper band ratchets down only; resets when price closes above it
+        if basic_upper[i] < final_upper[i - 1] or close[i - 1] > final_upper[i - 1]:
+            final_upper[i] = basic_upper[i]
+        else:
+            final_upper[i] = final_upper[i - 1]
 
-    # All of the last breakout_len bars must satisfy the condition
-    df["mt_bull"] = above.rolling(breakout_len).min().fillna(0).astype(bool)
-    df["mt_bear"] = below.rolling(breakout_len).min().fillna(0).astype(bool)
+        # Lower band ratchets up only; resets when price closes below it
+        if basic_lower[i] > final_lower[i - 1] or close[i - 1] < final_lower[i - 1]:
+            final_lower[i] = basic_lower[i]
+        else:
+            final_lower[i] = final_lower[i - 1]
 
-    return df.drop(columns=["_atr", "_mt_smooth", "_mt_upper", "_mt_lower"])
+        # Flip direction when price crosses the trailing stop
+        if not bull[i - 1] and close[i] > final_upper[i]:
+            bull[i] = True
+        elif bull[i - 1] and close[i] < final_lower[i]:
+            bull[i] = False
+        else:
+            bull[i] = bull[i - 1]
+
+    df["mt_bull"] = bull
+    df["mt_bear"] = [not b for b in bull]
+    return df
 
 
 def detect_signal(
@@ -79,12 +104,10 @@ def detect_signal(
     mid: int = 13,
     slow: int = 62,
     atr_len: int = 14,
-    smooth_len: int = 14,
-    r_mult: float = 2.5,
-    breakout_len: int = 2,
+    multiplier: float = 2.5,
 ) -> Signal | None:
     """
-    Evaluate the 5/13/62 EMA Cloud + Megatrend signal on the last CLOSED candle.
+    Evaluate the 5/13/62 EMA Cloud + Supertrend (Megatrend) signal on the last candle.
 
     Candle layout after fetching at HH:00 (top of hour):
       df.iloc[-1]  — curr: the candle that just closed at HH:00
@@ -92,12 +115,12 @@ def detect_signal(
 
     Returns a Signal (BUY or SELL) or None if no signal fires.
     """
-    min_rows = slow + atr_len + breakout_len + 2
+    min_rows = slow + atr_len + 2
     if len(df) < min_rows:
         return None
 
     df = calculate_emas(df, fast, mid, slow)
-    df = calculate_megatrend(df, atr_len, smooth_len, r_mult, breakout_len)
+    df = calculate_supertrend(df, atr_len, multiplier)
 
     if len(df) < 2:
         return None
