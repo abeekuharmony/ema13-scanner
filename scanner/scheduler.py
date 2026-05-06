@@ -91,11 +91,16 @@ async def scan_job() -> None:
 
 
 def _is_new(sig: Signal) -> bool:
-    """Return True if this signal has not been alerted for the same candle."""
+    """
+    Return True if this is a new alert.
+    Silent when: same candle AND same direction as last alert.
+    Fires when: new candle OR direction reversed on same candle.
+    """
     key = f"{sig.source}:{sig.symbol}"
-    if _last_alerted.get(key) == sig.candle_ts:
+    fingerprint = f"{sig.candle_ts}:{sig.direction}"
+    if _last_alerted.get(key) == fingerprint:
         return False
-    _last_alerted[key] = sig.candle_ts
+    _last_alerted[key] = fingerprint
     return True
 
 
