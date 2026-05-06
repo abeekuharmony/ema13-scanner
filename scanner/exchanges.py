@@ -13,7 +13,7 @@ MEXC_CONTRACT_BASE = "https://contract.mexc.com"
 
 
 async def fetch_mexc_ohlcv(
-    symbol: str, interval: str = "Hour1", limit: int = 100
+    symbol: str, interval: str = "Min60", limit: int = 100
 ) -> pd.DataFrame | None:
     """
     Fetch OHLCV data for a single MEXC Perpetual Futures symbol.
@@ -68,7 +68,7 @@ async def fetch_mexc_ohlcv(
 
 
 async def fetch_all_mexc(
-    symbols: list[str], interval: str = "Hour1", limit: int = 100
+    symbols: list[str], interval: str = "Min60", limit: int = 100
 ) -> dict[str, pd.DataFrame]:
     """
     Fetch OHLCV for multiple MEXC perpetual futures symbols concurrently.

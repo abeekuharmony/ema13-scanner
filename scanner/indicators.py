@@ -86,26 +86,24 @@ def detect_signal(
     """
     Evaluate the 5/13/62 EMA Cloud + Megatrend signal on the last CLOSED candle.
 
-    Candle layout after fetching with limit=100 at HH:01:
-      df.iloc[-1]  — forming (in-progress) candle, skipped
-      df.iloc[-2]  — curr: last fully closed candle  ← signal evaluated here
-      df.iloc[-3]  — prev: candle before curr
+    Candle layout after fetching at HH:00 (top of hour):
+      df.iloc[-1]  — curr: the candle that just closed at HH:00
+      df.iloc[-2]  — prev: the candle before that
 
     Returns a Signal (BUY or SELL) or None if no signal fires.
     """
-    min_rows = slow + atr_len + breakout_len + 3
+    min_rows = slow + atr_len + breakout_len + 2
     if len(df) < min_rows:
         return None
 
     df = calculate_emas(df, fast, mid, slow)
     df = calculate_megatrend(df, atr_len, smooth_len, r_mult, breakout_len)
 
-    if len(df) < 3:
+    if len(df) < 2:
         return None
 
-    # Skip df.iloc[-1] (potentially forming candle)
-    prev = df.iloc[-3]
-    curr = df.iloc[-2]
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
 
     # ── EMA Cloud ────────────────────────────────────────────────────────
     # PineScript: ta.crossover(e5, e13) → prev e5 <= e13 AND curr e5 > e13

@@ -28,7 +28,7 @@ async def main() -> None:
         f"MEXC Futures: {len(settings.mexc_symbols)} pairs\n"
         f"Twelve Data: {len(settings.twelvedata_symbols)} forex/commodity pairs\n"
         f"Strategy: EMA5/13/62 Cloud + Megatrend (ATR Breakout)\n"
-        f"Timeframe: 1H  |  Schedule: every hour at :{settings.scan_interval_minutes:02d} UTC"
+        f"Timeframe: 1H  |  Schedule: every hour at :00 UTC (top of hour)"
     )
 
     logger.info("Running initial scan...")

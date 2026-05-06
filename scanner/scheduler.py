@@ -30,7 +30,7 @@ async def scan_job() -> None:
         logger.info(f"Scanning {len(settings.mexc_symbols)} MEXC Futures pairs")
         mexc_data = await fetch_all_mexc(
             settings.mexc_symbols,
-            interval="Hour1",
+            interval="Min60",
             limit=settings.candle_limit,
         )
 
@@ -89,14 +89,14 @@ async def scan_job() -> None:
 
 def create_scheduler() -> AsyncIOScheduler:
     """
-    Create APScheduler instance that fires scan_job at HH:01 UTC every hour.
-    The 1-minute offset gives the exchange APIs time to finalise the HH:00 candle.
+    Create APScheduler instance that fires scan_job at HH:00 UTC every hour.
+    Runs at the top of the hour — the just-closed candle is df.iloc[-1].
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     scheduler.add_job(
         scan_job,
-        trigger=CronTrigger(minute=settings.scan_interval_minutes, timezone="UTC"),
+        trigger=CronTrigger(minute=0, timezone="UTC"),
         id="513_62_scan",
         name="5/13/62 Signal Scan",
         max_instances=1,
