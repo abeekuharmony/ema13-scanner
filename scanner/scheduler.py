@@ -7,7 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
 from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata
-from scanner.indicators import detect_signal, Signal
+from scanner.indicators import detect_signal, detect_body_cross_signal, Signal
 from scanner.alerts import send_alerts
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,12 @@ async def scan_job() -> None:
                 )
                 if sig and _is_new(sig):
                     new_signals.append(sig)
+
+                body_sig = detect_body_cross_signal(
+                    df, symbol=sym, source="mexc", mid=settings.ema_mid,
+                )
+                if body_sig and _is_new(body_sig):
+                    new_signals.append(body_sig)
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")
 
@@ -73,6 +79,12 @@ async def scan_job() -> None:
                     )
                     if sig and _is_new(sig):
                         new_signals.append(sig)
+
+                    body_sig = detect_body_cross_signal(
+                        df, symbol=sym, source="twelvedata", mid=settings.ema_mid,
+                    )
+                    if body_sig and _is_new(body_sig):
+                        new_signals.append(body_sig)
                 except Exception as e:
                     logger.error(f"Error processing {sym}: {e}")
 
@@ -93,10 +105,11 @@ async def scan_job() -> None:
 def _is_new(sig: Signal) -> bool:
     """
     Return True if this is a new alert.
-    Silent when: same candle AND same direction as last alert.
+    Key includes signal_type so EMA Cross and Body Cross track independently.
+    Silent when: same candle AND same direction.
     Fires when: new candle OR direction reversed on same candle.
     """
-    key = f"{sig.source}:{sig.symbol}"
+    key = f"{sig.signal_type}:{sig.source}:{sig.symbol}"
     fingerprint = f"{sig.candle_ts}:{sig.direction}"
     if _last_alerted.get(key) == fingerprint:
         return False

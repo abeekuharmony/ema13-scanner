@@ -6,13 +6,14 @@ import pandas as pd
 @dataclass
 class Signal:
     symbol: str
-    direction: str      # "BUY" or "SELL"
-    source: str         # "mexc" or "twelvedata"
+    direction: str       # "BUY" or "SELL"
+    source: str          # "mexc" or "twelvedata"
     close_price: float
     ema5: float
     ema13: float
     ema62: float
-    candle_ts: str = ""  # ISO timestamp of the signal candle, used for deduplication
+    candle_ts: str = ""          # ISO timestamp of the signal candle, used for deduplication
+    signal_type: str = "ema_cross"  # "ema_cross" or "body_cross"
 
 
 def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 62) -> pd.DataFrame:
@@ -176,6 +177,47 @@ def detect_signal(
             ema13=float(curr["e13"]),
             ema62=float(curr["e62"]),
             candle_ts=ts,
+        )
+
+    return None
+
+
+def detect_body_cross_signal(
+    df: pd.DataFrame,
+    symbol: str,
+    source: str,
+    mid: int = 13,
+) -> Signal | None:
+    """
+    H1 body cross: the just-closed candle's body (open→close) straddles EMA13.
+    df.iloc[-2] is the just-closed candle; df.iloc[-1] is the forming candle.
+    No EMA62 or Megatrend conditions required.
+    """
+    if len(df) < mid + 2:
+        return None
+
+    df = calculate_emas(df, fast=5, mid=mid, slow=62)
+    prev = df.iloc[-2]
+
+    prev_open  = float(prev["open"])
+    prev_close = float(prev["close"])
+    e13        = float(prev["e13"])
+    ts         = str(prev["timestamp"]) if "timestamp" in prev.index else ""
+
+    if prev_open < e13 and prev_close > e13:
+        return Signal(
+            symbol=symbol, direction="BUY", source=source,
+            close_price=prev_close,
+            ema5=float(prev["e5"]), ema13=e13, ema62=float(prev["e62"]),
+            candle_ts=ts, signal_type="body_cross",
+        )
+
+    if prev_open > e13 and prev_close < e13:
+        return Signal(
+            symbol=symbol, direction="SELL", source=source,
+            close_price=prev_close,
+            ema5=float(prev["e5"]), ema13=e13, ema62=float(prev["e62"]),
+            candle_ts=ts, signal_type="body_cross",
         )
 
     return None

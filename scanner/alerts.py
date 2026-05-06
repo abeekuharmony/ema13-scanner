@@ -30,17 +30,24 @@ def format_signal(signal: Signal) -> str:
     arrow   = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
     sym     = _fmt_symbol(signal.symbol, signal.source)
     close_s = _fmt_price(signal.close_price)
-    e5_s    = _fmt_price(signal.ema5)
     e13_s   = _fmt_price(signal.ema13)
-    e62_s   = _fmt_price(signal.ema62)
+    label   = "[EMA Cross]" if signal.signal_type == "ema_cross" else "[Body Cross]"
 
-    mt_label = "● Bull (Green)" if signal.direction == "BUY" else "● Bear (Red)"
+    if signal.signal_type == "ema_cross":
+        e5_s     = _fmt_price(signal.ema5)
+        e62_s    = _fmt_price(signal.ema62)
+        mt_label = "● Bull (Green)" if signal.direction == "BUY" else "● Bear (Red)"
+        return (
+            f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
+            f"    Close: {close_s}\n"
+            f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}\n"
+            f"    Megatrend: {mt_label}"
+        )
 
+    # body_cross — simpler format, no EMA62/Megatrend conditions used
     return (
-        f"{emoji} <b>{sym}</b>  {arrow}\n"
-        f"    Close: {close_s}\n"
-        f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}\n"
-        f"    Megatrend: {mt_label}"
+        f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
+        f"    Close: {close_s}  |  EMA13: {e13_s}"
     )
 
 
