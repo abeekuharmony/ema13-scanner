@@ -30,6 +30,10 @@ async def scan_job() -> None:
     logger.info(f"Scan started at {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     new_signals: list[Signal] = []
 
+    # Body cross only runs at the top of the hour (:00 scan).
+    # minute < 3 allows for small scheduler/network delays.
+    top_of_hour = start_time.minute < 3
+
     # ── MEXC Perpetual Futures ────────────────────────────────────────────
     try:
         logger.info(f"Scanning {len(settings.mexc_symbols)} MEXC Futures pairs")
@@ -49,11 +53,12 @@ async def scan_job() -> None:
                 if sig and _is_new(sig):
                     new_signals.append(sig)
 
-                body_sig = detect_body_cross_signal(
-                    df, symbol=sym, source="mexc", mid=settings.ema_mid,
-                )
-                if body_sig and _is_new(body_sig):
-                    new_signals.append(body_sig)
+                if top_of_hour:
+                    body_sig = detect_body_cross_signal(
+                        df, symbol=sym, source="mexc", mid=settings.ema_mid,
+                    )
+                    if body_sig and _is_new(body_sig):
+                        new_signals.append(body_sig)
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")
 
@@ -80,11 +85,12 @@ async def scan_job() -> None:
                     if sig and _is_new(sig):
                         new_signals.append(sig)
 
-                    body_sig = detect_body_cross_signal(
-                        df, symbol=sym, source="twelvedata", mid=settings.ema_mid,
-                    )
-                    if body_sig and _is_new(body_sig):
-                        new_signals.append(body_sig)
+                    if top_of_hour:
+                        body_sig = detect_body_cross_signal(
+                            df, symbol=sym, source="twelvedata", mid=settings.ema_mid,
+                        )
+                        if body_sig and _is_new(body_sig):
+                            new_signals.append(body_sig)
                 except Exception as e:
                     logger.error(f"Error processing {sym}: {e}")
 
