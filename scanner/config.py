@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     twelvedata_api_key: str = ""
 
     # Scanner behavior
-    scan_interval_minutes: int = 1
+    scan_interval_minutes: int = 15
     log_level: str = "INFO"
     # Need 62+ candles for EMA62 warmup plus ATR/Megatrend warmup
     candle_limit: int = 100

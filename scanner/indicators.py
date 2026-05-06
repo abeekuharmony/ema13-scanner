@@ -12,6 +12,7 @@ class Signal:
     ema5: float
     ema13: float
     ema62: float
+    candle_ts: str = ""  # ISO timestamp of the signal candle, used for deduplication
 
 
 def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 62) -> pd.DataFrame:
@@ -151,6 +152,8 @@ def detect_signal(
     mt_bear = bool(curr["mt_bear"])
 
     # ── Combined signal ──────────────────────────────────────────────────
+    ts = str(curr["timestamp"]) if "timestamp" in curr.index else ""
+
     if ema_bull and mt_bull:
         return Signal(
             symbol=symbol,
@@ -160,6 +163,7 @@ def detect_signal(
             ema5=float(curr["e5"]),
             ema13=float(curr["e13"]),
             ema62=float(curr["e62"]),
+            candle_ts=ts,
         )
 
     if ema_bear and mt_bear:
@@ -171,6 +175,7 @@ def detect_signal(
             ema5=float(curr["e5"]),
             ema13=float(curr["e13"]),
             ema62=float(curr["e62"]),
+            candle_ts=ts,
         )
 
     return None

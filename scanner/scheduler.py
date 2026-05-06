@@ -12,18 +12,23 @@ from scanner.alerts import send_alerts
 
 logger = logging.getLogger(__name__)
 
+# Deduplication: maps "source:symbol" → candle_ts of the last alerted signal.
+# Prevents sending the same 1H signal up to 4× when scanning every 15 minutes.
+_last_alerted: dict[str, str] = {}
+
 
 async def scan_job() -> None:
     """
-    Main scan job — runs at HH:01 UTC (one minute after each hourly candle close).
+    Main scan job — runs every 15 minutes.
+    Each 1H signal is only sent once per closed candle (deduped by candle_ts).
     1. Fetch 1H OHLCV for 30 MEXC perpetual futures symbols
-    2. Fetch 1H OHLCV for 10 Twelve Data forex/commodity symbols
+    2. Fetch 1H OHLCV for 8 Twelve Data forex symbols
     3. Run 5/13/62 EMA Cloud + Megatrend signal detection on each
-    4. Send Telegram alert for any signals found
+    4. Send Telegram alert for new signals only
     """
     start_time = datetime.now(timezone.utc)
     logger.info(f"Scan started at {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-    all_signals: list[Signal] = []
+    new_signals: list[Signal] = []
 
     # ── MEXC Perpetual Futures ────────────────────────────────────────────
     try:
@@ -41,15 +46,15 @@ async def scan_job() -> None:
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                     atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
                 )
-                if sig:
-                    all_signals.append(sig)
+                if sig and _is_new(sig):
+                    new_signals.append(sig)
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")
 
     except Exception as e:
         logger.error(f"MEXC scan failed: {e}")
 
-    # ── Twelve Data (Forex / Commodities) ────────────────────────────────
+    # ── Twelve Data (Forex) ───────────────────────────────────────────────
     if settings.twelvedata_api_key:
         try:
             logger.info(f"Scanning {len(settings.twelvedata_symbols)} Twelve Data symbols")
@@ -66,35 +71,45 @@ async def scan_job() -> None:
                         fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                         atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
                     )
-                    if sig:
-                        all_signals.append(sig)
+                    if sig and _is_new(sig):
+                        new_signals.append(sig)
                 except Exception as e:
                     logger.error(f"Error processing {sym}: {e}")
 
         except Exception as e:
             logger.error(f"Twelve Data scan failed: {e}")
     else:
-        logger.warning("TWELVEDATA_API_KEY not set — skipping forex/commodities")
+        logger.warning("TWELVEDATA_API_KEY not set — skipping forex")
 
     # ── Send Alerts ───────────────────────────────────────────────────────
     elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
     logger.info(
         f"Scan complete in {elapsed:.1f}s. "
-        f"{len(all_signals)} signal(s) found."
+        f"{len(new_signals)} new signal(s)."
     )
-    await send_alerts(all_signals)
+    await send_alerts(new_signals)
+
+
+def _is_new(sig: Signal) -> bool:
+    """Return True if this signal has not been alerted for the same candle."""
+    key = f"{sig.source}:{sig.symbol}"
+    if _last_alerted.get(key) == sig.candle_ts:
+        return False
+    _last_alerted[key] = sig.candle_ts
+    return True
 
 
 def create_scheduler() -> AsyncIOScheduler:
     """
-    Create APScheduler instance that fires scan_job at HH:00 UTC every hour.
-    Runs at the top of the hour — the just-closed candle is df.iloc[-1].
+    Create APScheduler instance that fires scan_job every 15 minutes.
+    Scanning sub-hourly catches signals as soon as the candle closes.
+    Deduplication in scan_job ensures each 1H signal is only sent once.
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     scheduler.add_job(
         scan_job,
-        trigger=CronTrigger(minute=0, timezone="UTC"),
+        trigger=CronTrigger(minute="*/15", timezone="UTC"),
         id="513_62_scan",
         name="5/13/62 Signal Scan",
         max_instances=1,
