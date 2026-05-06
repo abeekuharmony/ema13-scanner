@@ -52,11 +52,11 @@ async def fetch_mexc_ohlcv(
 
             df = pd.DataFrame({
                 "timestamp": pd.to_datetime(times, unit="s", utc=True),
-                "open":   pd.to_numeric(opens,  errors="coerce"),
-                "high":   pd.to_numeric(highs,  errors="coerce"),
-                "low":    pd.to_numeric(lows,   errors="coerce"),
-                "close":  pd.to_numeric(closes, errors="coerce"),
-                "volume": pd.to_numeric(vols,   errors="coerce").fillna(0),
+                "open":   pd.Series(opens,  dtype=float),
+                "high":   pd.Series(highs,  dtype=float),
+                "low":    pd.Series(lows,   dtype=float),
+                "close":  pd.Series(closes, dtype=float),
+                "volume": pd.Series(vols,   dtype=float).fillna(0.0),
             })
 
             df = df.sort_values("timestamp").reset_index(drop=True)
@@ -121,9 +121,10 @@ async def fetch_twelvedata_ohlcv(
             df = pd.DataFrame(data["values"])
             for col in ["open", "high", "low", "close"]:
                 df[col] = df[col].astype(float)
-            df["volume"] = pd.to_numeric(
-                df.get("volume", 0), errors="coerce"
-            ).fillna(0)
+            if "volume" in df.columns:
+                df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+            else:
+                df["volume"] = 0.0
 
             df["timestamp"] = pd.to_datetime(df["datetime"])
             df = df.drop(columns=["datetime"])
