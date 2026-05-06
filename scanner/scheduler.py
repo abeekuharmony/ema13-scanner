@@ -56,6 +56,7 @@ async def scan_job() -> None:
                 if top_of_hour:
                     body_sig = detect_body_cross_signal(
                         df, symbol=sym, source="mexc", mid=settings.ema_mid,
+                        scan_time=start_time,
                     )
                     if body_sig and _is_new(body_sig):
                         new_signals.append(body_sig)
@@ -88,6 +89,7 @@ async def scan_job() -> None:
                     if top_of_hour:
                         body_sig = detect_body_cross_signal(
                             df, symbol=sym, source="twelvedata", mid=settings.ema_mid,
+                            scan_time=start_time,
                         )
                         if body_sig and _is_new(body_sig):
                             new_signals.append(body_sig)

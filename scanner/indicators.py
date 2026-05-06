@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 
@@ -187,36 +188,57 @@ def detect_body_cross_signal(
     symbol: str,
     source: str,
     mid: int = 13,
+    scan_time: datetime | None = None,
 ) -> Signal | None:
     """
     H1 body cross: the just-closed candle's body (open→close) straddles EMA13.
-    df.iloc[-2] is the just-closed candle; df.iloc[-1] is the forming candle.
+    The just-closed candle is found by timestamp (current_hour - 1h), not by
+    index, so the result is correct regardless of whether the API has already
+    returned the new forming candle in its response.
     No EMA62 or Megatrend conditions required.
     """
     if len(df) < mid + 2:
         return None
 
+    if scan_time is None:
+        scan_time = datetime.now(timezone.utc)
+
+    # Timestamp of the just-closed 1H candle
+    current_hour   = scan_time.replace(minute=0, second=0, microsecond=0)
+    just_closed_ts = current_hour - timedelta(hours=1)
+
     df = calculate_emas(df, fast=5, mid=mid, slow=62)
-    prev = df.iloc[-2]
 
-    prev_open  = float(prev["open"])
-    prev_close = float(prev["close"])
-    e13        = float(prev["e13"])
-    ts         = str(prev["timestamp"]) if "timestamp" in prev.index else ""
+    # Match timestamp regardless of tz-awareness in the column
+    col = df["timestamp"]
+    if col.dt.tz is not None:
+        target = just_closed_ts
+    else:
+        target = just_closed_ts.replace(tzinfo=None)
 
-    if prev_open < e13 and prev_close > e13:
+    mask = col == target
+    if not mask.any():
+        return None
+
+    candle    = df[mask].iloc[0]
+    c_open    = float(candle["open"])
+    c_close   = float(candle["close"])
+    e13       = float(candle["e13"])
+    ts        = str(candle["timestamp"])
+
+    if c_open < e13 and c_close > e13:
         return Signal(
             symbol=symbol, direction="BUY", source=source,
-            close_price=prev_close,
-            ema5=float(prev["e5"]), ema13=e13, ema62=float(prev["e62"]),
+            close_price=c_close,
+            ema5=float(candle["e5"]), ema13=e13, ema62=float(candle["e62"]),
             candle_ts=ts, signal_type="body_cross",
         )
 
-    if prev_open > e13 and prev_close < e13:
+    if c_open > e13 and c_close < e13:
         return Signal(
             symbol=symbol, direction="SELL", source=source,
-            close_price=prev_close,
-            ema5=float(prev["e5"]), ema13=e13, ema62=float(prev["e62"]),
+            close_price=c_close,
+            ema5=float(candle["e5"]), ema13=e13, ema62=float(candle["e62"]),
             candle_ts=ts, signal_type="body_cross",
         )
 
