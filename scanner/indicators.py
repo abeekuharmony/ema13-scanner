@@ -13,8 +13,9 @@ class Signal:
     ema5: float
     ema13: float
     ema62: float
-    candle_ts: str = ""          # ISO timestamp of the signal candle, used for deduplication
+    candle_ts: str = ""             # ISO timestamp of the signal candle, used for deduplication
     signal_type: str = "ema_cross"  # "ema_cross" or "body_cross"
+    mt_bull: bool = True            # actual Megatrend state at signal time (informational)
 
 
 def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 62) -> pd.DataFrame:
@@ -149,14 +150,15 @@ def detect_signal(
         and curr["close"] < curr["e62"]
     )
 
-    # ── Megatrend ────────────────────────────────────────────────────────
-    mt_bull = bool(curr["mt_bull"])
-    mt_bear = bool(curr["mt_bear"])
+    # ── Megatrend state (informational — not a hard filter) ─────────────
+    mt_bull_state = bool(curr["mt_bull"])
 
-    # ── Combined signal ──────────────────────────────────────────────────
+    # ── Signal: EMA cross + EMA62 filter only ───────────────────────────
+    # Megatrend is shown in the alert as context but does not block the signal.
+    # The cross fires first; Megatrend confirmation typically follows 2-4 bars later.
     ts = str(curr["timestamp"]) if "timestamp" in curr.index else ""
 
-    if ema_bull and mt_bull:
+    if ema_bull:
         return Signal(
             symbol=symbol,
             direction="BUY",
@@ -166,9 +168,10 @@ def detect_signal(
             ema13=float(curr["e13"]),
             ema62=float(curr["e62"]),
             candle_ts=ts,
+            mt_bull=mt_bull_state,
         )
 
-    if ema_bear and mt_bear:
+    if ema_bear:
         return Signal(
             symbol=symbol,
             direction="SELL",
@@ -178,6 +181,7 @@ def detect_signal(
             ema13=float(curr["e13"]),
             ema62=float(curr["e62"]),
             candle_ts=ts,
+            mt_bull=mt_bull_state,
         )
 
     return None

@@ -36,7 +36,7 @@ def format_signal(signal: Signal) -> str:
     if signal.signal_type == "ema_cross":
         e5_s     = _fmt_price(signal.ema5)
         e62_s    = _fmt_price(signal.ema62)
-        mt_label = "● Bull (Green)" if signal.direction == "BUY" else "● Bear (Red)"
+        mt_label = "● Bull (Green)" if signal.mt_bull else "● Bear (Red)"
         return (
             f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
             f"    Close: {close_s}\n"
