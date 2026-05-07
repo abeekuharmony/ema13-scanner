@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
-from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata, fetch_all_oanda
+from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata, fetch_all_oanda, fetch_all_yfinance
 from scanner.indicators import detect_signal, detect_body_cross_signal, Signal
 from scanner.alerts import send_alerts
 
@@ -131,7 +131,36 @@ async def scan_job() -> None:
         except Exception as e:
             logger.error(f"Twelve Data scan failed: {e}")
     else:
-        logger.warning("No forex API key set — skipping forex pairs")
+        # yfinance — no API key needed, always available
+        try:
+            logger.info(f"Scanning {len(settings.twelvedata_symbols)} forex pairs via Yahoo Finance")
+            yf_data = await fetch_all_yfinance(
+                settings.twelvedata_symbols,
+                limit=settings.candle_limit,
+            )
+
+            for sym, df in yf_data.items():
+                try:
+                    sig = detect_signal(
+                        df, symbol=sym, source="yfinance",
+                        fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
+                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+                    )
+                    if sig and _is_new(sig):
+                        new_signals.append(sig)
+
+                    if top_of_hour:
+                        body_sig = detect_body_cross_signal(
+                            df, symbol=sym, source="yfinance", mid=settings.ema_mid,
+                            scan_time=start_time,
+                        )
+                        if body_sig and _is_new(body_sig):
+                            new_signals.append(body_sig)
+                except Exception as e:
+                    logger.error(f"Error processing {sym}: {e}")
+
+        except Exception as e:
+            logger.error(f"Yahoo Finance scan failed: {e}")
 
     # ── Send Alerts ───────────────────────────────────────────────────────
     elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
