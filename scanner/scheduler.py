@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
-from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata
+from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata, fetch_all_oanda
 from scanner.indicators import detect_signal, detect_body_cross_signal, Signal
 from scanner.alerts import send_alerts
 
@@ -66,8 +66,40 @@ async def scan_job() -> None:
     except Exception as e:
         logger.error(f"MEXC scan failed: {e}")
 
-    # ── Twelve Data (Forex) ───────────────────────────────────────────────
-    if settings.twelvedata_api_key:
+    # ── OANDA Forex ───────────────────────────────────────────────────────
+    if settings.oanda_api_key:
+        try:
+            logger.info(f"Scanning {len(settings.twelvedata_symbols)} OANDA forex pairs")
+            oanda_data = await fetch_all_oanda(
+                settings.twelvedata_symbols,
+                granularity="H1",
+                count=settings.candle_limit,
+                api_key=settings.oanda_api_key,
+            )
+
+            for sym, df in oanda_data.items():
+                try:
+                    sig = detect_signal(
+                        df, symbol=sym, source="oanda",
+                        fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
+                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+                    )
+                    if sig and _is_new(sig):
+                        new_signals.append(sig)
+
+                    if top_of_hour:
+                        body_sig = detect_body_cross_signal(
+                            df, symbol=sym, source="oanda", mid=settings.ema_mid,
+                            scan_time=start_time,
+                        )
+                        if body_sig and _is_new(body_sig):
+                            new_signals.append(body_sig)
+                except Exception as e:
+                    logger.error(f"Error processing {sym}: {e}")
+
+        except Exception as e:
+            logger.error(f"OANDA scan failed: {e}")
+    elif settings.twelvedata_api_key:
         try:
             logger.info(f"Scanning {len(settings.twelvedata_symbols)} Twelve Data symbols")
             td_data = await fetch_all_twelvedata(
@@ -99,7 +131,7 @@ async def scan_job() -> None:
         except Exception as e:
             logger.error(f"Twelve Data scan failed: {e}")
     else:
-        logger.warning("TWELVEDATA_API_KEY not set — skipping forex")
+        logger.warning("No forex API key set — skipping forex pairs")
 
     # ── Send Alerts ───────────────────────────────────────────────────────
     elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()

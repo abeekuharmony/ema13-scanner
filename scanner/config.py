@@ -12,8 +12,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # Twelve Data (Forex / Commodities)
+    # Twelve Data (legacy — replaced by OANDA for forex)
     twelvedata_api_key: str = ""
+
+    # OANDA Practice API (forex — matches TradingView's data feed exactly)
+    oanda_api_key: str = ""
 
     # Scanner behavior
     scan_interval_minutes: int = 15
