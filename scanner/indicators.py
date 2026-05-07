@@ -59,9 +59,9 @@ def calculate_supertrend(
     ], axis=1).max(axis=1).values
     atr_series = pd.Series(tr_vals).ewm(com=atr_len - 1, adjust=False).mean().values
 
-    hl2          = (high + low) / 2.0
-    basic_upper  = hl2 + multiplier * atr_series
-    basic_lower  = hl2 - multiplier * atr_series
+    hlc3         = (high + low + close) / 3.0
+    basic_upper  = hlc3 + multiplier * atr_series
+    basic_lower  = hlc3 - multiplier * atr_series
 
     final_upper = [0.0] * n
     final_lower = [0.0] * n
