@@ -32,9 +32,9 @@ class Settings(BaseSettings):
         "BTC_USDT",    "ETH_USDT",    "SOL_USDT",    "XRP_USDT",    "DOGE_USDT",
         "BNB_USDT",    "ADA_USDT",    "AVAX_USDT",   "DOT_USDT",    "LINK_USDT",
         "POL_USDT",    "LTC_USDT",    "ATOM_USDT",   "NEAR_USDT",   "APT_USDT",
-        "ARB_USDT",    "OP_USDT",     "SUI_USDT",    "FIL_USDT",    "INJ_USDT",
+        "ARB_USDT",    "OP_USDT",     "SUI_USDT",    "ENA_USDT",    "INJ_USDT",
         "SEI_USDT",    "TIA_USDT",    "WIF_USDT",    "PEPE_USDT",   "S_USDT",
-        "RENDER_USDT", "AAVE_USDT",   "TON_USDT",    "ORDI_USDT",   "JUP_USDT",
+        "RENDER_USDT", "AAVE_USDT",   "SHIB_USDT",   "ORDI_USDT",   "JUP_USDT",
     ]
 
     # ── Forex pairs (Yahoo Finance — no API key required) ────────────
