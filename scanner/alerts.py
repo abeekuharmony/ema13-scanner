@@ -34,9 +34,13 @@ def format_signal(signal: Signal) -> str:
     label   = "[EMA Cross]" if signal.signal_type == "ema_cross" else "[Body Cross]"
 
     if signal.signal_type == "ema_cross":
-        e5_s     = _fmt_price(signal.ema5)
-        e62_s    = _fmt_price(signal.ema62)
-        mt_label = "● Bull (Green)" if signal.mt_bull else "● Bear (Red)"
+        e5_s      = _fmt_price(signal.ema5)
+        e62_s     = _fmt_price(signal.ema62)
+        confirmed = (signal.direction == "BUY" and signal.mt_bull) or \
+                    (signal.direction == "SELL" and not signal.mt_bull)
+        mt_color  = "Bull (Green)" if signal.mt_bull else "Bear (Red)"
+        mt_status = "confirmed ✓" if confirmed else "early entry"
+        mt_label  = f"● {mt_color} — {mt_status}"
         return (
             f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
             f"    Close: {close_s}\n"
