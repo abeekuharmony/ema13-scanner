@@ -12,12 +12,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # Twelve Data (legacy — replaced by OANDA for forex)
-    twelvedata_api_key: str = ""
-
-    # OANDA Practice API (forex — matches TradingView's data feed exactly)
-    oanda_api_key: str = ""
-
     # Scanner behavior
     scan_interval_minutes: int = 15
     log_level: str = "INFO"
@@ -30,13 +24,10 @@ class Settings(BaseSettings):
     ema_slow: int = 62
 
     # ── Megatrend = Supertrend parameters ────────────
-    # Matches PineScript ta.supertrend(multiplier, atr_len) / 'Simple Supertrend' mode.
-    # Green (bull) when close > trailing lower band. Red (bear) when close < trailing upper band.
     mt_atr_len: int = 14
     mt_multiplier: float = 2.5
 
     # ── MEXC Perpetual Futures (30 crypto pairs) ─────
-    # Format: BASE_USDT  (matches MEXC Contract API symbol format)
     mexc_symbols: list[str] = [
         "BTC_USDT",    "ETH_USDT",    "SOL_USDT",    "XRP_USDT",    "DOGE_USDT",
         "BNB_USDT",    "ADA_USDT",    "AVAX_USDT",   "DOT_USDT",    "LINK_USDT",
@@ -46,10 +37,8 @@ class Settings(BaseSettings):
         "RENDER_USDT", "AAVE_USDT",   "TON_USDT",    "ORDI_USDT",   "JUP_USDT",
     ]
 
-    # ── Twelve Data Forex (8 confirmed free-tier pairs) ─
-    # XAG/USD (Silver) requires a paid plan — excluded.
-    # US30/USD (Dow Jones) is not available on Twelve Data — excluded.
-    twelvedata_symbols: list[str] = [
+    # ── Forex pairs (Yahoo Finance — no API key required) ────────────
+    forex_symbols: list[str] = [
         "EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD",
         "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF",
     ]

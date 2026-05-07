@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
-from scanner.exchanges import fetch_all_mexc, fetch_all_twelvedata, fetch_all_oanda, fetch_all_yfinance
+from scanner.exchanges import fetch_all_mexc, fetch_all_yfinance
 from scanner.indicators import detect_signal, detect_body_cross_signal, Signal
 from scanner.alerts import send_alerts
 
@@ -22,7 +22,7 @@ async def scan_job() -> None:
     Main scan job — runs every 15 minutes.
     Each 1H signal is only sent once per closed candle (deduped by candle_ts).
     1. Fetch 1H OHLCV for 30 MEXC perpetual futures symbols
-    2. Fetch 1H OHLCV for 8 Twelve Data forex symbols
+    2. Fetch 1H OHLCV for 8 forex pairs via Yahoo Finance
     3. Run 5/13/62 EMA Cloud + Megatrend signal detection on each
     4. Send Telegram alert for new signals only
     """
@@ -66,101 +66,36 @@ async def scan_job() -> None:
     except Exception as e:
         logger.error(f"MEXC scan failed: {e}")
 
-    # ── OANDA Forex ───────────────────────────────────────────────────────
-    if settings.oanda_api_key:
-        try:
-            logger.info(f"Scanning {len(settings.twelvedata_symbols)} OANDA forex pairs")
-            oanda_data = await fetch_all_oanda(
-                settings.twelvedata_symbols,
-                granularity="H1",
-                count=settings.candle_limit,
-                api_key=settings.oanda_api_key,
-            )
+    # ── Yahoo Finance Forex ───────────────────────────────────────────────
+    try:
+        logger.info(f"Scanning {len(settings.forex_symbols)} forex pairs via Yahoo Finance")
+        yf_data = await fetch_all_yfinance(
+            settings.forex_symbols,
+            limit=settings.candle_limit,
+        )
 
-            for sym, df in oanda_data.items():
-                try:
-                    sig = detect_signal(
-                        df, symbol=sym, source="oanda",
-                        fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+        for sym, df in yf_data.items():
+            try:
+                sig = detect_signal(
+                    df, symbol=sym, source="yfinance",
+                    fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
+                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+                )
+                if sig and _is_new(sig):
+                    new_signals.append(sig)
+
+                if top_of_hour:
+                    body_sig = detect_body_cross_signal(
+                        df, symbol=sym, source="yfinance", mid=settings.ema_mid,
+                        scan_time=start_time,
                     )
-                    if sig and _is_new(sig):
-                        new_signals.append(sig)
+                    if body_sig and _is_new(body_sig):
+                        new_signals.append(body_sig)
+            except Exception as e:
+                logger.error(f"Error processing {sym}: {e}")
 
-                    if top_of_hour:
-                        body_sig = detect_body_cross_signal(
-                            df, symbol=sym, source="oanda", mid=settings.ema_mid,
-                            scan_time=start_time,
-                        )
-                        if body_sig and _is_new(body_sig):
-                            new_signals.append(body_sig)
-                except Exception as e:
-                    logger.error(f"Error processing {sym}: {e}")
-
-        except Exception as e:
-            logger.error(f"OANDA scan failed: {e}")
-    elif settings.twelvedata_api_key:
-        try:
-            logger.info(f"Scanning {len(settings.twelvedata_symbols)} Twelve Data symbols")
-            td_data = await fetch_all_twelvedata(
-                settings.twelvedata_symbols,
-                interval="1h",
-                outputsize=settings.candle_limit,
-            )
-
-            for sym, df in td_data.items():
-                try:
-                    sig = detect_signal(
-                        df, symbol=sym, source="twelvedata",
-                        fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
-                    )
-                    if sig and _is_new(sig):
-                        new_signals.append(sig)
-
-                    if top_of_hour:
-                        body_sig = detect_body_cross_signal(
-                            df, symbol=sym, source="twelvedata", mid=settings.ema_mid,
-                            scan_time=start_time,
-                        )
-                        if body_sig and _is_new(body_sig):
-                            new_signals.append(body_sig)
-                except Exception as e:
-                    logger.error(f"Error processing {sym}: {e}")
-
-        except Exception as e:
-            logger.error(f"Twelve Data scan failed: {e}")
-    else:
-        # yfinance — no API key needed, always available
-        try:
-            logger.info(f"Scanning {len(settings.twelvedata_symbols)} forex pairs via Yahoo Finance")
-            yf_data = await fetch_all_yfinance(
-                settings.twelvedata_symbols,
-                limit=settings.candle_limit,
-            )
-
-            for sym, df in yf_data.items():
-                try:
-                    sig = detect_signal(
-                        df, symbol=sym, source="yfinance",
-                        fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                        atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
-                    )
-                    if sig and _is_new(sig):
-                        new_signals.append(sig)
-
-                    if top_of_hour:
-                        body_sig = detect_body_cross_signal(
-                            df, symbol=sym, source="yfinance", mid=settings.ema_mid,
-                            scan_time=start_time,
-                        )
-                        if body_sig and _is_new(body_sig):
-                            new_signals.append(body_sig)
-                except Exception as e:
-                    logger.error(f"Error processing {sym}: {e}")
-
-        except Exception as e:
-            logger.error(f"Yahoo Finance scan failed: {e}")
+    except Exception as e:
+        logger.error(f"Yahoo Finance scan failed: {e}")
 
     # ── Send Alerts ───────────────────────────────────────────────────────
     elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
