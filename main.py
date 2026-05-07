@@ -26,9 +26,9 @@ async def main() -> None:
     await send_telegram_message(
         "<b>5/13/62 Signal Scanner</b> started.\n"
         f"MEXC Futures: {len(settings.mexc_symbols)} pairs\n"
-        f"Twelve Data: {len(settings.twelvedata_symbols)} forex/commodity pairs\n"
+        f"Forex (Yahoo Finance): {len(settings.forex_symbols)} pairs\n"
         f"Strategy: EMA5/13/62 Cloud + Megatrend (ATR Breakout)\n"
-        f"Timeframe: 1H  |  Schedule: every hour at :00 UTC (top of hour)"
+        f"Timeframe: 1H  |  Schedule: every 15 min (:00, :15, :30, :45 UTC)"
     )
 
     logger.info("Running initial scan...")
