@@ -12,7 +12,7 @@ def _fmt_symbol(symbol: str, source: str) -> str:
     """Convert internal symbol to a clean display name."""
     if source == "mexc":
         return symbol.replace("_", "/") + " (Perp)"
-    return symbol  # Twelve Data symbols are already like EUR/USD
+    return symbol  # yfinance symbols are already like EUR/USD
 
 
 def _fmt_price(price: float) -> str:
@@ -26,15 +26,14 @@ def _fmt_price(price: float) -> str:
 
 def format_signal(signal: Signal) -> str:
     """Format a single Signal into an HTML Telegram message block."""
-    emoji   = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
-    arrow   = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
     sym     = _fmt_symbol(signal.symbol, signal.source)
     close_s = _fmt_price(signal.close_price)
-    e13_s   = _fmt_price(signal.ema13)
-    label   = "[EMA Cross]" if signal.signal_type == "ema_cross" else "[Body Cross]"
 
     if signal.signal_type == "ema_cross":
+        emoji     = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
+        arrow     = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
         e5_s      = _fmt_price(signal.ema5)
+        e13_s     = _fmt_price(signal.ema13)
         e62_s     = _fmt_price(signal.ema62)
         confirmed = (signal.direction == "BUY" and signal.mt_bull) or \
                     (signal.direction == "SELL" and not signal.mt_bull)
@@ -42,35 +41,52 @@ def format_signal(signal: Signal) -> str:
         mt_status = "confirmed ✓" if confirmed else "early entry"
         mt_label  = f"● {mt_color} — {mt_status}"
         return (
-            f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
+            f"{emoji} <b>{sym}</b>  {arrow}  [EMA Cross]\n"
             f"    Close: {close_s}\n"
             f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}\n"
             f"    Megatrend: {mt_label}"
         )
 
-    # body_cross — simpler format, no EMA62/Megatrend conditions used
-    return (
-        f"{emoji} <b>{sym}</b>  {arrow}  {label}\n"
-        f"    Close: {close_s}  |  EMA13: {e13_s}"
-    )
+    if signal.signal_type == "mt_flip":
+        emoji      = "\U0001f7e2" if signal.direction == "GREEN" else "\U0001f534"
+        color_text = "turned GREEN 🟢" if signal.direction == "GREEN" else "turned RED 🔴"
+        return (
+            f"{emoji} <b>{sym}</b>  [Megatrend Flip]\n"
+            f"    Megatrend {color_text}\n"
+            f"    Close: {close_s}"
+        )
+
+    return f"<b>{sym}</b> — unknown signal type"
 
 
 def build_alert_message(signals: list[Signal]) -> str:
     if not signals:
         return ""
 
-    buys  = [s for s in signals if s.direction == "BUY"]
-    sells = [s for s in signals if s.direction == "SELL"]
+    ema_crosses = [s for s in signals if s.signal_type == "ema_cross"]
+    mt_flips    = [s for s in signals if s.signal_type == "mt_flip"]
+
+    buys    = [s for s in ema_crosses if s.direction == "BUY"]
+    sells   = [s for s in ema_crosses if s.direction == "SELL"]
+    greens  = [s for s in mt_flips    if s.direction == "GREEN"]
+    reds    = [s for s in mt_flips    if s.direction == "RED"]
+
+    # Build summary line
+    parts = []
+    if ema_crosses:
+        parts.append(f"{len(buys)} BUY / {len(sells)} SELL [EMA Cross]")
+    if mt_flips:
+        parts.append(f"{len(greens)} Green / {len(reds)} Red [MT Flip]")
+    summary = "  |  ".join(parts)
 
     header = (
         "<b>5/13/62 Signal Alert</b>\n"
-        f"<i>{len(signals)} signal(s) on 1H timeframe"
-        f" — {len(buys)} BUY / {len(sells)} SELL</i>\n"
+        f"<i>{len(signals)} signal(s) on 1H — {summary}</i>\n"
         + "─" * 25 + "\n\n"
     )
 
-    # Show BUYs first, then SELLs
-    ordered = buys + sells
+    # Order: EMA buys → EMA sells → MT greens → MT reds
+    ordered = buys + sells + greens + reds
     body = "\n\n".join(format_signal(s) for s in ordered)
     return header + body
 

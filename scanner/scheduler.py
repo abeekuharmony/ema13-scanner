@@ -7,32 +7,32 @@ from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
 from scanner.exchanges import fetch_all_mexc, fetch_all_yfinance
-from scanner.indicators import detect_signal, detect_body_cross_signal, Signal
+from scanner.indicators import detect_signal, detect_mt_flip_signal, Signal
 from scanner.alerts import send_alerts
 
 logger = logging.getLogger(__name__)
 
-# Deduplication: maps "source:symbol" → candle_ts of the last alerted signal.
-# Prevents sending the same 1H signal up to 4× when scanning every 15 minutes.
+# Deduplication: maps "signal_type:source:symbol" → "candle_ts:direction"
+# Prevents sending the same signal multiple times per candle.
 _last_alerted: dict[str, str] = {}
 
 
 async def scan_job() -> None:
     """
-    Main scan job — runs every 15 minutes.
-    Each 1H signal is only sent once per closed candle (deduped by candle_ts).
-    1. Fetch 1H OHLCV for 30 MEXC perpetual futures symbols
-    2. Fetch 1H OHLCV for 8 forex pairs via Yahoo Finance
-    3. Run 5/13/62 EMA Cloud + Megatrend signal detection on each
-    4. Send Telegram alert for new signals only
+    Main scan job — runs every 15 minutes (:00, :15, :30, :45).
+    Each signal is only sent once per candle (deduped by candle_ts + direction).
+
+    Per scan:
+      1. Fetch 1H OHLCV for 30 MEXC perpetual futures symbols
+      2. Fetch 1H OHLCV for 8 forex pairs via Yahoo Finance
+      3. For each symbol:
+           a. EMA Cross  — fires when EMA5 crosses EMA13 with EMA62 trend filter
+           b. MT Flip    — fires when Megatrend changes colour (Green↔Red)
+      4. Send Telegram alert for any new signals
     """
     start_time = datetime.now(timezone.utc)
     logger.info(f"Scan started at {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     new_signals: list[Signal] = []
-
-    # Body cross only runs at the top of the hour (:00 scan).
-    # minute < 3 allows for small scheduler/network delays.
-    top_of_hour = start_time.minute < 3
 
     # ── MEXC Perpetual Futures ────────────────────────────────────────────
     try:
@@ -45,6 +45,7 @@ async def scan_job() -> None:
 
         for sym, df in mexc_data.items():
             try:
+                # EMA cross
                 sig = detect_signal(
                     df, symbol=sym, source="mexc",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
@@ -53,13 +54,14 @@ async def scan_job() -> None:
                 if sig and _is_new(sig):
                     new_signals.append(sig)
 
-                if top_of_hour:
-                    body_sig = detect_body_cross_signal(
-                        df, symbol=sym, source="mexc", mid=settings.ema_mid,
-                        scan_time=start_time,
-                    )
-                    if body_sig and _is_new(body_sig):
-                        new_signals.append(body_sig)
+                # Megatrend colour flip
+                mt_sig = detect_mt_flip_signal(
+                    df, symbol=sym, source="mexc",
+                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+                )
+                if mt_sig and _is_new(mt_sig):
+                    new_signals.append(mt_sig)
+
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")
 
@@ -76,6 +78,7 @@ async def scan_job() -> None:
 
         for sym, df in yf_data.items():
             try:
+                # EMA cross
                 sig = detect_signal(
                     df, symbol=sym, source="yfinance",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
@@ -84,13 +87,14 @@ async def scan_job() -> None:
                 if sig and _is_new(sig):
                     new_signals.append(sig)
 
-                if top_of_hour:
-                    body_sig = detect_body_cross_signal(
-                        df, symbol=sym, source="yfinance", mid=settings.ema_mid,
-                        scan_time=start_time,
-                    )
-                    if body_sig and _is_new(body_sig):
-                        new_signals.append(body_sig)
+                # Megatrend colour flip
+                mt_sig = detect_mt_flip_signal(
+                    df, symbol=sym, source="yfinance",
+                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
+                )
+                if mt_sig and _is_new(mt_sig):
+                    new_signals.append(mt_sig)
+
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")
 
@@ -108,12 +112,12 @@ async def scan_job() -> None:
 
 def _is_new(sig: Signal) -> bool:
     """
-    Return True if this is a new alert.
-    Key includes signal_type so EMA Cross and Body Cross track independently.
-    Silent when: same candle AND same direction.
-    Fires when: new candle OR direction reversed on same candle.
+    Return True if this signal has not been alerted yet for this candle.
+    Keyed by signal_type + source + symbol.
+    Fingerprint combines candle_ts + direction — fires again if direction flips
+    on the same candle (e.g. Megatrend flips GREEN then RED within same hour).
     """
-    key = f"{sig.signal_type}:{sig.source}:{sig.symbol}"
+    key         = f"{sig.signal_type}:{sig.source}:{sig.symbol}"
     fingerprint = f"{sig.candle_ts}:{sig.direction}"
     if _last_alerted.get(key) == fingerprint:
         return False
@@ -124,8 +128,6 @@ def _is_new(sig: Signal) -> bool:
 def create_scheduler() -> AsyncIOScheduler:
     """
     Create APScheduler instance that fires scan_job every 15 minutes.
-    Scanning sub-hourly catches signals as soon as the candle closes.
-    Deduplication in scan_job ensures each 1H signal is only sent once.
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
