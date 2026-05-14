@@ -94,7 +94,7 @@ _YF_SYMBOL_MAP: dict[str, str] = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
     "USD/JPY": "USDJPY=X",
-    "XAU/USD": "XAUUSD=X",
+    "XAU/USD": "GC=F",      # Gold Futures — XAUUSD=X is dead on Yahoo Finance
     "AUD/USD": "AUDUSD=X",
     "USD/CAD": "USDCAD=X",
     "NZD/USD": "NZDUSD=X",
