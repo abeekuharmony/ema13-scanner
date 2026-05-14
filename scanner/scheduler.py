@@ -78,7 +78,9 @@ async def scan_job() -> None:
 
         for sym, df in yf_data.items():
             try:
-                # EMA cross
+                # EMA cross only — no Megatrend for yfinance
+                # (yfinance prices differ from TradingView's OANDA feed;
+                #  Supertrend on yfinance data would not match what you see on TradingView)
                 sig = detect_signal(
                     df, symbol=sym, source="yfinance",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
@@ -86,14 +88,6 @@ async def scan_job() -> None:
                 )
                 if sig and _is_new(sig):
                     new_signals.append(sig)
-
-                # Megatrend colour flip
-                mt_sig = detect_mt_flip_signal(
-                    df, symbol=sym, source="yfinance",
-                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
-                )
-                if mt_sig and _is_new(mt_sig):
-                    new_signals.append(mt_sig)
 
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")

@@ -169,13 +169,13 @@ def detect_mt_flip_signal(
     multiplier: float = 2.5,
 ) -> Signal | None:
     """
-    Detect a Megatrend (Supertrend) colour flip on the most recent candle.
+    Detect a Megatrend (Supertrend) colour flip on the last two CLOSED candles.
 
     direction="GREEN" → Megatrend flipped from Red  to Green (bearish → bullish)
     direction="RED"   → Megatrend flipped from Green to Red   (bullish → bearish)
 
-    No BUY/SELL judgement — purely a colour-change notification.
-    Runs every 15-minute scan, same cadence as the EMA cross.
+    Only closed candles are examined — the current forming candle is excluded
+    because its close price changes every minute and can cause false flips.
     Deduplication prevents re-alerting the same flip on the same candle.
     """
     if len(df) < atr_len + 2:
@@ -183,9 +183,18 @@ def detect_mt_flip_signal(
 
     df = calculate_supertrend(df, atr_len, multiplier)
 
-    prev = df.iloc[-2]
-    curr = df.iloc[-1]
+    # Drop the forming (current) candle — only trust closed candles
+    now    = pd.Timestamp.now(tz="UTC")
+    col    = df["timestamp"]
+    if col.dt.tz is None:
+        now = now.replace(tzinfo=None)
+    closed = df[col + pd.Timedelta(hours=1) <= now]
 
+    if len(closed) < 2:
+        return None
+
+    prev  = closed.iloc[-2]
+    curr  = closed.iloc[-1]
     ts    = str(curr["timestamp"]) if "timestamp" in curr.index else ""
     close = float(curr["close"])
 
