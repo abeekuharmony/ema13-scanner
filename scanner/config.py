@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # ── Megatrend = Supertrend parameters ────────────
     mt_atr_len: int = 14
-    mt_multiplier: float = 2.5
+    mt_multiplier: float = 1.5
 
     # ── MEXC Perpetual Futures (30 crypto pairs) ─────
     mexc_symbols: list[str] = [
