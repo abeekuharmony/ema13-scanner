@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -13,8 +15,27 @@ from scanner.alerts import send_alerts
 logger = logging.getLogger(__name__)
 
 # Deduplication: maps "signal_type:source:symbol" → "candle_ts:direction"
-# Prevents sending the same signal multiple times per candle.
+# Persisted to disk so Railway process restarts don't re-send already-alerted signals.
+_DEDUP_FILE = Path("dedup_state.json")
 _last_alerted: dict[str, str] = {}
+
+
+def _load_dedup() -> None:
+    global _last_alerted
+    if _DEDUP_FILE.exists():
+        try:
+            _last_alerted = json.loads(_DEDUP_FILE.read_text(encoding="utf-8"))
+            logger.info(f"Loaded {len(_last_alerted)} dedup entries from {_DEDUP_FILE}")
+        except Exception as exc:
+            logger.warning(f"Could not load dedup state: {exc} — starting fresh")
+            _last_alerted = {}
+
+
+def _save_dedup() -> None:
+    try:
+        _DEDUP_FILE.write_text(json.dumps(_last_alerted), encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"Could not save dedup state: {exc}")
 
 
 async def scan_job() -> None:
@@ -110,19 +131,23 @@ def _is_new(sig: Signal) -> bool:
     Keyed by signal_type + source + symbol.
     Fingerprint combines candle_ts + direction — fires again if direction flips
     on the same candle (e.g. Megatrend flips GREEN then RED within same hour).
+    State is persisted to disk so process restarts don't re-alert old signals.
     """
     key         = f"{sig.signal_type}:{sig.source}:{sig.symbol}"
     fingerprint = f"{sig.candle_ts}:{sig.direction}"
     if _last_alerted.get(key) == fingerprint:
         return False
     _last_alerted[key] = fingerprint
+    _save_dedup()
     return True
 
 
 def create_scheduler() -> AsyncIOScheduler:
     """
     Create APScheduler instance that fires scan_job every 15 minutes.
+    Loads persisted dedup state so restarts don't re-send already-alerted signals.
     """
+    _load_dedup()
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     scheduler.add_job(
