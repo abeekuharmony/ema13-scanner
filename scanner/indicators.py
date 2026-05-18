@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 
@@ -17,6 +18,22 @@ class Signal:
     mt_bull: bool = True           # Megatrend state at signal time
 
 
+def _heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert regular OHLCV to Heikin-Ashi OHLCV. Expects open/high/low/close columns."""
+    n    = len(df)
+    ha_c = ((df["open"] + df["high"] + df["low"] + df["close"]) / 4).values
+    ha_o = np.empty(n)
+    ha_o[0] = (df["open"].iloc[0] + df["close"].iloc[0]) / 2
+    for i in range(1, n):
+        ha_o[i] = (ha_o[i - 1] + ha_c[i - 1]) / 2
+    ha           = df.copy()
+    ha["close"]  = ha_c
+    ha["open"]   = ha_o
+    ha["high"]   = np.maximum(df["high"].values, np.maximum(ha_o, ha_c))
+    ha["low"]    = np.minimum(df["low"].values,  np.minimum(ha_o, ha_c))
+    return ha
+
+
 def calculate_emas(df: pd.DataFrame, fast: int = 5, mid: int = 13, slow: int = 62) -> pd.DataFrame:
     """Add e5, e13, e62 EMA columns to DataFrame. Expects a 'close' column."""
     df = df.copy()
@@ -30,32 +47,35 @@ def calculate_supertrend(
     df: pd.DataFrame,
     atr_len: int = 14,
     multiplier: float = 2.5,
+    use_ha: bool = False,
+    atr_type: str = "rma",
 ) -> pd.DataFrame:
     """
-    Supertrend indicator — matches PineScript ta.supertrend(multiplier, atr_len).
-    This is the 'Simple Supertrend' mode used by the real Megatrend (jaggedsoft/SharkCIA).
+    Supertrend indicator with optional Heikin-Ashi smoothing and SMA ATR.
 
-    The line acts as a trailing ATR stop:
-      - Bullish: close is above the lower band (green Megatrend)
-      - Bearish: close is below the upper band (red Megatrend)
-    Flips direction whenever price crosses the trailing stop line.
+    use_ha=True + atr_type='sma' gives the best empirical match to the private
+    Megatrend indicator timing (tested against BTCUSDT.P flip times on MEXC).
 
     mt_bull = True  → Megatrend green (bullish)
     mt_bull = False → Megatrend red   (bearish)
     """
-    df = df.copy()
-    high  = df["high"].values
-    low   = df["low"].values
-    close = df["close"].values
-    n     = len(df)
+    work  = _heikin_ashi(df) if use_ha else df.copy()
+    high  = work["high"].values
+    low   = work["low"].values
+    close = work["close"].values
+    n     = len(work)
 
-    # Wilder's ATR (com = period - 1  →  alpha = 1/period, matches ta.atr)
     tr_vals = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - df["close"].shift(1)).abs(),
-        (df["low"]  - df["close"].shift(1)).abs(),
+        work["high"] - work["low"],
+        (work["high"] - work["close"].shift(1)).abs(),
+        (work["low"]  - work["close"].shift(1)).abs(),
     ], axis=1).max(axis=1).values
-    atr_series = pd.Series(tr_vals).ewm(com=atr_len - 1, adjust=False).mean().values
+
+    if atr_type == "sma":
+        atr_series = pd.Series(tr_vals).rolling(atr_len, min_periods=1).mean().values
+    else:
+        # Wilder's RMA (com = period - 1 → alpha = 1/period, matches ta.atr)
+        atr_series = pd.Series(tr_vals).ewm(com=atr_len - 1, adjust=False).mean().values
 
     hlc3        = (high + low + close) / 3.0
     basic_upper = hlc3 + multiplier * atr_series
@@ -92,9 +112,10 @@ def calculate_supertrend(
         else:
             bull[i] = bull[i - 1]
 
-    df["mt_bull"] = bull
-    df["mt_bear"] = [not b for b in bull]
-    return df
+    out           = df.copy()
+    out["mt_bull"] = bull
+    out["mt_bear"] = [not b for b in bull]
+    return out
 
 
 def detect_signal(
@@ -181,7 +202,8 @@ def detect_mt_flip_signal(
     if len(df) < atr_len + 2:
         return None
 
-    df = calculate_supertrend(df, atr_len, multiplier)
+    # HA candles + SMA ATR give the best empirical match to the Megatrend flip times
+    df = calculate_supertrend(df, atr_len, multiplier, use_ha=True, atr_type="sma")
 
     # Drop the forming (current) candle — only trust closed candles
     now    = pd.Timestamp.now(tz="UTC")
