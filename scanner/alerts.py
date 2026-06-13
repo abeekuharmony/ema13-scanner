@@ -30,24 +30,47 @@ def format_signal(signal: Signal) -> str:
     close_s = _fmt_price(signal.close_price)
 
     if signal.signal_type == "ema_cross":
-        emoji = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
-        arrow = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
         e5_s  = _fmt_price(signal.ema5)
         e13_s = _fmt_price(signal.ema13)
         e62_s = _fmt_price(signal.ema62)
+
+        # Confluence: both the EMA cross AND the Megatrend agree on direction.
+        # Megatrend is only reliable for MEXC (same data feed as the scanner);
+        # yfinance/forex prices differ from TradingView's OANDA feed, so no MT.
+        confirmed = signal.source == "mexc" and (
+            (signal.direction == "BUY"  and signal.mt_bull) or
+            (signal.direction == "SELL" and not signal.mt_bull)
+        )
+
+        if confirmed:
+            # Both SELL (or BUY) confirmations aligned → STRONG signal
+            emoji = "🟢🟢" if signal.direction == "BUY" else "🔴🔴"
+            label = "▲ STRONG BUY" if signal.direction == "BUY" else "▼ STRONG SELL"
+            align = (
+                "Megatrend GREEN + EMA5 crossed ↑ EMA13 (EMA62 below)"
+                if signal.direction == "BUY" else
+                "Megatrend RED + EMA5 crossed ↓ EMA13 (EMA62 above)"
+            )
+            mt_color = "Bull (Green)" if signal.mt_bull else "Bear (Red)"
+            return (
+                f"{emoji} <b>{sym}</b>  {label}  [EMA Cross + Megatrend]\n"
+                f"    ✅ Both confirmations aligned: {align}\n"
+                f"    Close: {close_s}\n"
+                f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}\n"
+                f"    Megatrend: ● {mt_color} — confirmed ✓"
+            )
+
+        # Single confirmation — EMA cross only (Megatrend not yet aligned)
+        emoji = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
+        arrow = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
         base  = (
             f"{emoji} <b>{sym}</b>  {arrow}  [EMA Cross]\n"
             f"    Close: {close_s}\n"
             f"    EMA5: {e5_s}  |  EMA13: {e13_s}  |  EMA62: {e62_s}"
         )
-        # Megatrend state is only reliable for MEXC (same data source as scanner)
-        # yfinance prices differ from TradingView's OANDA feed — omit Megatrend
         if signal.source == "mexc":
-            confirmed = (signal.direction == "BUY" and signal.mt_bull) or \
-                        (signal.direction == "SELL" and not signal.mt_bull)
-            mt_color  = "Bull (Green)" if signal.mt_bull else "Bear (Red)"
-            mt_status = "confirmed ✓" if confirmed else "early entry"
-            base += f"\n    Megatrend: ● {mt_color} — {mt_status}"
+            mt_color = "Bull (Green)" if signal.mt_bull else "Bear (Red)"
+            base += f"\n    Megatrend: ● {mt_color} — early entry"
         return base
 
     if signal.signal_type == "mt_flip":

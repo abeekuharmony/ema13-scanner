@@ -138,7 +138,10 @@ def detect_signal(
         return None
 
     df = calculate_emas(df, fast, mid, slow)
-    df = calculate_supertrend(df, atr_len, multiplier)
+    # Use the SAME Megatrend method as detect_mt_flip_signal (HA candles + SMA
+    # ATR) so the "confirmed ✓" state here agrees with the actual Megatrend
+    # flip alerts and with what's on the TradingView chart.
+    df = calculate_supertrend(df, atr_len, multiplier, use_ha=True, atr_type="sma")
 
     prev = df.iloc[-2]
     curr = df.iloc[-1]
