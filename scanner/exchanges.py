@@ -13,6 +13,27 @@ logger = logging.getLogger(__name__)
 
 MEXC_CONTRACT_BASE = "https://contract.mexc.com"
 
+# MEXC interval → seconds per candle (used to drop the still-forming candle)
+_INTERVAL_SECONDS = {
+    "Min1": 60, "Min5": 300, "Min15": 900, "Min30": 1800,
+    "Min60": 3600, "Hour4": 14400, "Hour8": 28800,
+    "Day1": 86400, "Week1": 604800,
+}
+
+
+def _drop_forming(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """
+    Remove the still-forming candle so detectors only ever see CLOSED candles.
+
+    Acting on the forming candle was the repaint bug: its "close" is just the
+    live price, so signals fired mid-candle (EMA cross, EMA13 body cross)
+    could un-cross by the candle close — phantom alerts that never appear
+    on the finished chart.
+    """
+    secs = _INTERVAL_SECONDS.get(interval, 3600)
+    now = pd.Timestamp.now(tz="UTC")
+    return df[df["timestamp"] + pd.Timedelta(seconds=secs) <= now].reset_index(drop=True)
+
 
 async def fetch_mexc_ohlcv(
     symbol: str, interval: str = "Min60", limit: int = 100
@@ -61,6 +82,8 @@ async def fetch_mexc_ohlcv(
             })
 
             df = df.sort_values("timestamp").reset_index(drop=True)
+            # Repaint fix: signals must only ever evaluate CLOSED candles
+            df = _drop_forming(df, interval)
             return df
 
         except Exception as e:
