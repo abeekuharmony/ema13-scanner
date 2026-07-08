@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     # Scanner behavior
     scan_interval_minutes: int = 15
     log_level: str = "INFO"
-    # Need 62+ candles for EMA62 warmup plus ATR/Megatrend warmup
-    candle_limit: int = 100
+    # 200 bars: proper warmup for EMA62 (init bias <0.2% after 200 bars),
+    # JMA Megatrend (~40 bars) and ATR — used by all detectors incl. retest
+    candle_limit: int = 200
 
     # ── EMA Cloud periods ─────────────────────────────
     ema_fast: int = 5

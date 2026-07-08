@@ -82,6 +82,43 @@ def format_signal(signal: Signal) -> str:
             f"    Close: {close_s}"
         )
 
+    if signal.signal_type in ("retest_setup", "retest_trigger", "retest_cancel"):
+        is_buy  = signal.direction == "BUY"
+        arrow   = "▲ BUY" if is_buy else "▼ SELL"
+        entry_s = _fmt_price(signal.entry)
+        stop_s  = _fmt_price(signal.stop)
+        tp1_s   = _fmt_price(signal.tp1)
+        tp2_s   = _fmt_price(signal.tp2)
+        atr_s   = _fmt_price(signal.atr)
+
+        if signal.signal_type == "retest_setup":
+            emoji = "\U0001f7e2" if is_buy else "\U0001f534"
+            side  = "above" if is_buy else "below"
+            return (
+                f"{emoji}📋 <b>{sym}</b>  {arrow}  [EMA13 Retest SETUP]\n"
+                f"    Body closed {side} EMA13 — trend + Megatrend aligned\n"
+                f"    Watch for pullback to EMA13 ≈ {entry_s}\n"
+                f"    Plan: limit {entry_s}  |  Stop {stop_s} (1×ATR = {atr_s})\n"
+                f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
+                f"    <i>Level drifts with the EMA13 — TRIGGER alert fires on the touch</i>"
+            )
+
+        if signal.signal_type == "retest_trigger":
+            emoji = "\U0001f3af"
+            return (
+                f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Retest TRIGGERED]\n"
+                f"    Price pulled back and tested the EMA13\n"
+                f"    Entry: {entry_s}  |  Stop: {stop_s} (1×ATR = {atr_s})\n"
+                f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
+                f"    Close now: {close_s}"
+            )
+
+        return (
+            f"❌ <b>{sym}</b>  {arrow}  [EMA13 Retest CANCELLED]\n"
+            f"    Candle body closed back across the EMA13 before the retest\n"
+            f"    Close: {close_s}"
+        )
+
     if signal.signal_type == "ema13_body_cross":
         emoji  = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
         arrow  = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
@@ -105,6 +142,7 @@ def build_alert_message(signals: list[Signal]) -> str:
     ema_crosses = [s for s in signals if s.signal_type == "ema_cross"]
     mt_flips    = [s for s in signals if s.signal_type == "mt_flip"]
     body_cross  = [s for s in signals if s.signal_type == "ema13_body_cross"]
+    retests     = [s for s in signals if s.signal_type.startswith("retest_")]
 
     buys    = [s for s in ema_crosses if s.direction == "BUY"]
     sells   = [s for s in ema_crosses if s.direction == "SELL"]
@@ -112,9 +150,14 @@ def build_alert_message(signals: list[Signal]) -> str:
     reds    = [s for s in mt_flips    if s.direction == "RED"]
     bc_buys  = [s for s in body_cross if s.direction == "BUY"]
     bc_sells = [s for s in body_cross if s.direction == "SELL"]
+    rt_trig  = [s for s in retests if s.signal_type == "retest_trigger"]
+    rt_setup = [s for s in retests if s.signal_type == "retest_setup"]
+    rt_canc  = [s for s in retests if s.signal_type == "retest_cancel"]
 
     # Build summary line
     parts = []
+    if retests:
+        parts.append(f"{len(rt_trig)} trig / {len(rt_setup)} setup / {len(rt_canc)} cancel [Retest]")
     if ema_crosses:
         parts.append(f"{len(buys)} BUY / {len(sells)} SELL [EMA Cross]")
     if body_cross:
@@ -129,8 +172,9 @@ def build_alert_message(signals: list[Signal]) -> str:
         + "─" * 25 + "\n\n"
     )
 
-    # Order: EMA buys → EMA sells → body-cross buys → body-cross sells → MT greens → MT reds
-    ordered = buys + sells + bc_buys + bc_sells + greens + reds
+    # Order: retest triggers first (most actionable) → setups → EMA crosses
+    #        → body crosses → MT flips → retest cancels
+    ordered = rt_trig + rt_setup + buys + sells + bc_buys + bc_sells + greens + reds + rt_canc
     body = "\n\n".join(format_signal(s) for s in ordered)
     return header + body
 

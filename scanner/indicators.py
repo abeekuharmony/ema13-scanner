@@ -14,9 +14,14 @@ class Signal:
     ema13: float
     ema62: float
     candle_ts: str = ""            # ISO timestamp of the signal candle, used for deduplication
-    signal_type: str = "ema_cross" # "ema_cross" | "mt_flip" | "ema13_body_cross"
+    signal_type: str = "ema_cross" # "ema_cross" | "mt_flip" | "ema13_body_cross" | "retest_setup" | "retest_trigger" | "retest_cancel"
     mt_bull: bool = True           # Megatrend state at signal time
     open_price: float = 0.0        # candle open (used by ema13_body_cross alerts)
+    entry: float = 0.0             # retest trade plan: limit entry at EMA13
+    stop: float = 0.0              # retest trade plan: 1×ATR beyond entry
+    tp1: float = 0.0               # retest trade plan: 1.5R target
+    tp2: float = 0.0               # retest trade plan: 2R target
+    atr: float = 0.0               # ATR(14) at signal time (for transposing to other feeds)
 
 
 def _heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
@@ -341,5 +346,101 @@ def detect_ema13_body_cross(
             close_price=c, ema5=float(curr["e5"]), ema13=e13, ema62=float(curr["e62"]),
             candle_ts=ts, signal_type="ema13_body_cross", open_price=o,
         )
+
+    return None
+
+
+def detect_ema13_retest(
+    df: pd.DataFrame,
+    symbol: str,
+    source: str,
+    fast: int = 5,
+    mid: int = 13,
+    slow: int = 62,
+    k_retest: int = 12,
+) -> Signal | None:
+    """
+    EMA13 retest strategy — backtested 12mo/4 symbols: pullback entries after a
+    FILTERED body cross (trend + Megatrend aligned) were the strongest edge
+    measured (PF 1.41 pre-cost, PF 1.18 at forex-level costs, TP 1.5R).
+
+    State machine per symbol, evaluated statelessly on the last CLOSED bar:
+      retest_setup   — this bar is a filtered body cross of the EMA13
+                       (body across + close beyond EMA62 + Megatrend agrees).
+                       Plan: limit at EMA13, stop 1×ATR, TP 1.5R / 2R.
+      retest_trigger — first touch of the EMA13 within k_retest bars of the
+                       most recent filtered cross (the validated entry).
+      retest_cancel  — candle body closed back across the EMA13 before any
+                       touch: setup is void.
+    Deduplication is per candle via the normal fingerprint mechanism.
+    """
+    if len(df) < 70:
+        return None
+
+    df  = calculate_emas(df, fast, mid, slow)
+    df  = calculate_megatrend(df)
+    tr  = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - df["close"].shift(1)).abs(),
+        (df["low"]  - df["close"].shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    df["atr14"] = tr.ewm(com=13, adjust=False).mean()
+
+    o   = df["open"].values
+    c   = df["close"].values
+    h   = df["high"].values
+    l   = df["low"].values
+    e13 = df["e13"].values
+    e62 = df["e62"].values
+    atr = df["atr14"].values
+    mtb = df["mt_bull"].values
+    j   = len(df) - 1
+    ts  = str(df["timestamp"].iloc[j]) if "timestamp" in df.columns else ""
+
+    def filtered_cross(t: int) -> str | None:
+        if o[t] < e13[t] and c[t] > e13[t] and c[t] > e62[t] and mtb[t]:
+            return "BUY"
+        if o[t] > e13[t] and c[t] < e13[t] and c[t] < e62[t] and not mtb[t]:
+            return "SELL"
+        return None
+
+    def build(sig_type: str, direction: str, level: float, atr_v: float) -> Signal:
+        sign = 1 if direction == "BUY" else -1
+        dist = 1.0 * atr_v
+        return Signal(
+            symbol=symbol, direction=direction, source=source,
+            close_price=float(c[j]), ema5=0.0, ema13=float(level), ema62=float(e62[j]),
+            candle_ts=ts, signal_type=sig_type, mt_bull=bool(mtb[j]),
+            entry=float(level), stop=float(level - sign * dist),
+            tp1=float(level + sign * dist * 1.5), tp2=float(level + sign * dist * 2.0),
+            atr=float(atr_v),
+        )
+
+    # 1) Is the last closed bar itself a fresh filtered cross? → SETUP
+    d = filtered_cross(j)
+    if d and atr[j] > 0:
+        return build("retest_setup", d, e13[j], atr[j])
+
+    # 2) Otherwise: is there an active setup whose first event lands on bar j?
+    for i in range(j - 1, max(j - 1 - k_retest, 69), -1):
+        d = filtered_cross(i)
+        if d:
+            break
+    else:
+        return None
+
+    is_long = d == "BUY"
+    for t in range(i + 1, j + 1):
+        touched      = (l[t] <= e13[t]) if is_long else (h[t] >= e13[t])
+        crossed_back = (c[t] < e13[t])  if is_long else (c[t] > e13[t])
+        if touched:
+            # first touch — only alert if it happened on the newest closed bar
+            if t == j and atr[j] > 0:
+                return build("retest_trigger", d, e13[j], atr[j])
+            return None
+        if crossed_back:
+            if t == j:
+                return build("retest_cancel", d, e13[j], atr[j])
+            return None
 
     return None
