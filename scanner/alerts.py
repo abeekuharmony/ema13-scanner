@@ -82,6 +82,19 @@ def format_signal(signal: Signal) -> str:
             f"    Close: {close_s}"
         )
 
+    if signal.signal_type == "ema13_body_cross":
+        emoji  = "\U0001f7e2" if signal.direction == "BUY" else "\U0001f534"
+        arrow  = "▲ BUY" if signal.direction == "BUY" else "▼ SELL"
+        move   = "opened below, closed above" if signal.direction == "BUY" else "opened above, closed below"
+        open_s = _fmt_price(signal.open_price)
+        e13_s  = _fmt_price(signal.ema13)
+        return (
+            f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross]\n"
+            f"    Candle {move} the EMA13\n"
+            f"    Open: {open_s}  →  Close: {close_s}\n"
+            f"    EMA13: {e13_s}"
+        )
+
     return f"<b>{sym}</b> — unknown signal type"
 
 
@@ -91,16 +104,21 @@ def build_alert_message(signals: list[Signal]) -> str:
 
     ema_crosses = [s for s in signals if s.signal_type == "ema_cross"]
     mt_flips    = [s for s in signals if s.signal_type == "mt_flip"]
+    body_cross  = [s for s in signals if s.signal_type == "ema13_body_cross"]
 
     buys    = [s for s in ema_crosses if s.direction == "BUY"]
     sells   = [s for s in ema_crosses if s.direction == "SELL"]
     greens  = [s for s in mt_flips    if s.direction == "GREEN"]
     reds    = [s for s in mt_flips    if s.direction == "RED"]
+    bc_buys  = [s for s in body_cross if s.direction == "BUY"]
+    bc_sells = [s for s in body_cross if s.direction == "SELL"]
 
     # Build summary line
     parts = []
     if ema_crosses:
         parts.append(f"{len(buys)} BUY / {len(sells)} SELL [EMA Cross]")
+    if body_cross:
+        parts.append(f"{len(bc_buys)} BUY / {len(bc_sells)} SELL [EMA13 Body]")
     if mt_flips:
         parts.append(f"{len(greens)} Green / {len(reds)} Red [MT Flip]")
     summary = "  |  ".join(parts)
@@ -111,8 +129,8 @@ def build_alert_message(signals: list[Signal]) -> str:
         + "─" * 25 + "\n\n"
     )
 
-    # Order: EMA buys → EMA sells → MT greens → MT reds
-    ordered = buys + sells + greens + reds
+    # Order: EMA buys → EMA sells → body-cross buys → body-cross sells → MT greens → MT reds
+    ordered = buys + sells + bc_buys + bc_sells + greens + reds
     body = "\n\n".join(format_signal(s) for s in ordered)
     return header + body
 

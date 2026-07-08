@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
 from scanner.exchanges import fetch_all_mexc, fetch_all_yfinance
-from scanner.indicators import detect_signal, detect_mt_flip_signal, Signal
+from scanner.indicators import detect_signal, detect_mt_flip_signal, detect_ema13_body_cross, Signal
 from scanner.alerts import send_alerts
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,14 @@ async def scan_job() -> None:
                 )
                 if mt_sig and _is_new(mt_sig):
                     new_signals.append(mt_sig)
+
+                # EMA13 body cross — candle body closed across the EMA13
+                body_sig = detect_ema13_body_cross(
+                    df, symbol=sym, source="mexc",
+                    fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
+                )
+                if body_sig and _is_new(body_sig):
+                    new_signals.append(body_sig)
 
             except Exception as e:
                 logger.error(f"Error processing {sym}: {e}")

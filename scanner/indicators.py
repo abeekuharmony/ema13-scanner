@@ -14,8 +14,9 @@ class Signal:
     ema13: float
     ema62: float
     candle_ts: str = ""            # ISO timestamp of the signal candle, used for deduplication
-    signal_type: str = "ema_cross" # "ema_cross" or "mt_flip"
+    signal_type: str = "ema_cross" # "ema_cross" | "mt_flip" | "ema13_body_cross"
     mt_bull: bool = True           # Megatrend state at signal time
+    open_price: float = 0.0        # candle open (used by ema13_body_cross alerts)
 
 
 def _heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
@@ -237,6 +238,52 @@ def detect_mt_flip_signal(
             symbol=symbol, direction="RED", source=source,
             close_price=close, ema5=0.0, ema13=0.0, ema62=0.0,
             candle_ts=ts, signal_type="mt_flip", mt_bull=False,
+        )
+
+    return None
+
+
+def detect_ema13_body_cross(
+    df: pd.DataFrame,
+    symbol: str,
+    source: str,
+    fast: int = 5,
+    mid: int = 13,
+    slow: int = 62,
+) -> Signal | None:
+    """
+    Detect a candle whose BODY closed across the EMA13 on the last CLOSED candle.
+
+    direction="BUY"  → candle OPENED below EMA13 and CLOSED above it (bullish)
+    direction="SELL" → candle OPENED above EMA13 and CLOSED below it (bearish)
+
+    This is distinct from the 5/13/62 EMA cross: it tracks price action (the
+    candle body itself) piercing the EMA13, not EMA5 crossing EMA13.
+    """
+    if len(df) < mid + 2:
+        return None
+
+    df   = calculate_emas(df, fast, mid, slow)
+    curr = df.iloc[-1]
+    e13  = float(curr["e13"])
+    o    = float(curr["open"])
+    c    = float(curr["close"])
+    ts   = str(curr["timestamp"]) if "timestamp" in curr.index else ""
+
+    # Bullish body cross: opened below the EMA13, closed above it
+    if o < e13 and c > e13:
+        return Signal(
+            symbol=symbol, direction="BUY", source=source,
+            close_price=c, ema5=float(curr["e5"]), ema13=e13, ema62=float(curr["e62"]),
+            candle_ts=ts, signal_type="ema13_body_cross", open_price=o,
+        )
+
+    # Bearish body cross: opened above the EMA13, closed below it
+    if o > e13 and c < e13:
+        return Signal(
+            symbol=symbol, direction="SELL", source=source,
+            close_price=c, ema5=float(curr["e5"]), ema13=e13, ema62=float(curr["e62"]),
+            candle_ts=ts, signal_type="ema13_body_cross", open_price=o,
         )
 
     return None
