@@ -360,18 +360,27 @@ def detect_ema13_retest(
     k_retest: int = 12,
 ) -> Signal | None:
     """
-    EMA13 retest strategy — backtested 12mo/4 symbols: pullback entries after a
-    FILTERED body cross (trend + Megatrend aligned) were the strongest edge
-    measured (PF 1.41 pre-cost, PF 1.18 at forex-level costs, TP 1.5R).
+    EMA13 retest strategy — backtested 12mo/4 symbols (filter decomposition):
+      raw crosses            PF 1.01  (no edge)
+      Megatrend gate only    PF 0.96  (LOSES — MT alone is the weakest filter)
+      EMA62 gate only        PF 1.15  (the workhorse filter)
+      EMA62 + decisive cross + no-weekend: PF 1.21, +159R/yr — shipped config.
+    The Megatrend hard gate is REMOVED: once the decisive-cross filter exists
+    it added zero per-trade quality and halved the trade count (74R vs 159R).
+    MT state is still reported as context. Costs matter: edge survives only
+    on cheap execution (forex/maker); crypto taker fees destroy it (PF 0.65).
 
     State machine per symbol, evaluated statelessly on the last CLOSED bar:
-      retest_setup   — this bar is a filtered body cross of the EMA13
-                       (body across + close beyond EMA62 + Megatrend agrees).
+      retest_setup   — filtered body cross of the EMA13: body across +
+                       close beyond EMA62 + decisive close (≥0.3×ATR beyond
+                       the EMA13) + not a weekend bar.
                        Plan: limit at EMA13, stop 1×ATR, TP 1.5R / 2R.
       retest_trigger — first touch of the EMA13 within k_retest bars of the
                        most recent filtered cross (the validated entry).
       retest_cancel  — candle body closed back across the EMA13 before any
                        touch: setup is void.
+    Weekend bars (Sat/Sun UTC) neither create setups nor fire triggers —
+    weekend trades tested worse and forex is closed for the user anyway.
     Deduplication is per candle via the normal fingerprint mechanism.
     """
     if len(df) < 70:
@@ -394,13 +403,25 @@ def detect_ema13_retest(
     e62 = df["e62"].values
     atr = df["atr14"].values
     mtb = df["mt_bull"].values
+    dow = df["timestamp"].dt.dayofweek.values if "timestamp" in df.columns else None
     j   = len(df) - 1
     ts  = str(df["timestamp"].iloc[j]) if "timestamp" in df.columns else ""
 
+    # Weekend bars neither create setups nor fire triggers/cancels
+    if dow is not None and dow[j] >= 5:
+        return None
+
     def filtered_cross(t: int) -> str | None:
-        if o[t] < e13[t] and c[t] > e13[t] and c[t] > e62[t] and mtb[t]:
+        if dow is not None and dow[t] >= 5:
+            return None
+        if np.isnan(atr[t]) or atr[t] <= 0:
+            return None
+        strong = abs(c[t] - e13[t]) >= 0.3 * atr[t]  # decisive close beyond EMA13
+        if not strong:
+            return None
+        if o[t] < e13[t] and c[t] > e13[t] and c[t] > e62[t]:
             return "BUY"
-        if o[t] > e13[t] and c[t] < e13[t] and c[t] < e62[t] and not mtb[t]:
+        if o[t] > e13[t] and c[t] < e13[t] and c[t] < e62[t]:
             return "SELL"
         return None
 

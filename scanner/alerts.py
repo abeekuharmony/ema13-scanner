@@ -91,15 +91,18 @@ def format_signal(signal: Signal) -> str:
         tp2_s   = _fmt_price(signal.tp2)
         atr_s   = _fmt_price(signal.atr)
 
+        mt_ctx = "Megatrend: ● Bull (Green)" if signal.mt_bull else "Megatrend: ● Bear (Red)"
+
         if signal.signal_type == "retest_setup":
             emoji = "\U0001f7e2" if is_buy else "\U0001f534"
             side  = "above" if is_buy else "below"
             return (
                 f"{emoji}📋 <b>{sym}</b>  {arrow}  [EMA13 Retest SETUP]\n"
-                f"    Body closed {side} EMA13 — trend + Megatrend aligned\n"
+                f"    Decisive body close {side} EMA13, trend aligned (EMA62)\n"
                 f"    Watch for pullback to EMA13 ≈ {entry_s}\n"
                 f"    Plan: limit {entry_s}  |  Stop {stop_s} (1×ATR = {atr_s})\n"
                 f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
+                f"    {mt_ctx}\n"
                 f"    <i>Level drifts with the EMA13 — TRIGGER alert fires on the touch</i>"
             )
 
@@ -110,7 +113,7 @@ def format_signal(signal: Signal) -> str:
                 f"    Price pulled back and tested the EMA13\n"
                 f"    Entry: {entry_s}  |  Stop: {stop_s} (1×ATR = {atr_s})\n"
                 f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
-                f"    Close now: {close_s}"
+                f"    {mt_ctx}  |  Close now: {close_s}"
             )
 
         return (
