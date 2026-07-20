@@ -91,34 +91,31 @@ def format_signal(signal: Signal) -> str:
         tp2_s   = _fmt_price(signal.tp2)
         atr_s   = _fmt_price(signal.atr)
 
-        mt_ctx = "Megatrend: ● Bull (Green)" if signal.mt_bull else "Megatrend: ● Bear (Red)"
-
         if signal.signal_type == "retest_setup":
             emoji = "\U0001f7e2" if is_buy else "\U0001f534"
             side  = "above" if is_buy else "below"
             return (
-                f"{emoji}📋 <b>{sym}</b>  {arrow}  [EMA13 Retest SETUP]\n"
-                f"    Decisive body close {side} EMA13, trend aligned (EMA62)\n"
-                f"    Watch for pullback to EMA13 ≈ {entry_s}\n"
+                f"{emoji}📋 <b>{sym}</b>  {arrow}  [EMA5 Retest SETUP]\n"
+                f"    Decisive body close {side} EMA13; trend aligned (EMA62 + Megatrend line)\n"
+                f"    Watch for shallow pullback to EMA5 ≈ {entry_s}\n"
                 f"    Plan: limit {entry_s}  |  Stop {stop_s} (1×ATR = {atr_s})\n"
                 f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
-                f"    {mt_ctx}\n"
-                f"    <i>Level drifts with the EMA13 — TRIGGER alert fires on the touch</i>"
+                f"    <i>Level drifts with the EMA5 — TRIGGER fires on the touch. Void if a body closes back across EMA13.</i>"
             )
 
         if signal.signal_type == "retest_trigger":
             emoji = "\U0001f3af"
             return (
-                f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Retest TRIGGERED]\n"
-                f"    Price pulled back and tested the EMA13\n"
+                f"{emoji} <b>{sym}</b>  {arrow}  [EMA5 Retest TRIGGERED]\n"
+                f"    Shallow pullback tested the EMA5 — entry zone\n"
                 f"    Entry: {entry_s}  |  Stop: {stop_s} (1×ATR = {atr_s})\n"
                 f"    TP: {tp1_s} (1.5R)  /  {tp2_s} (2R)\n"
-                f"    {mt_ctx}  |  Close now: {close_s}"
+                f"    Close now: {close_s}"
             )
 
         return (
-            f"❌ <b>{sym}</b>  {arrow}  [EMA13 Retest CANCELLED]\n"
-            f"    Candle body closed back across the EMA13 before the retest\n"
+            f"❌ <b>{sym}</b>  {arrow}  [EMA5 Retest CANCELLED]\n"
+            f"    Body closed back across the EMA13 before the EMA5 retest\n"
             f"    Close: {close_s}"
         )
 

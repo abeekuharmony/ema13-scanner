@@ -360,27 +360,29 @@ def detect_ema13_retest(
     k_retest: int = 12,
 ) -> Signal | None:
     """
-    EMA13 retest strategy — backtested 12mo/4 symbols (filter decomposition):
-      raw crosses            PF 1.01  (no edge)
-      Megatrend gate only    PF 0.96  (LOSES — MT alone is the weakest filter)
-      EMA62 gate only        PF 1.15  (the workhorse filter)
-      EMA62 + decisive cross + no-weekend: PF 1.21, +159R/yr — shipped config.
-    The Megatrend hard gate is REMOVED: once the decisive-cross filter exists
-    it added zero per-trade quality and halved the trade count (74R vs 159R).
-    MT state is still reported as context. Costs matter: edge survives only
-    on cheap execution (forex/maker); crypto taker fees destroy it (PF 0.65).
+    EMA13 body-cross → EMA5 retest strategy. Re-backtested on real data
+    (BTC + gold 12mo, USDJPY + GBPUSD spot; decisive cross + EMA62 + no-weekend):
+      retest target EMA13  PF 1.12
+      retest target EMA5   PF 1.33   ← shallower pullback = stronger trend
+      EMA5 + Megatrend-as-LEVEL (close vs JMA line, not colour): PF 1.39
+    Per symbol (EMA5 + EMA62 + Megatrend-level): BTC 1.40, GOLD 1.43 —
+    but FX MAJORS FAIL (USDJPY 0.75, GBPUSD 1.01): this is a crypto/metals
+    trend-continuation edge, NOT a forex-majors edge. Edge survives only on
+    cheap execution (forex/metals spread); crypto taker fees destroy it.
+
+    Megatrend is used as a LEVEL here (price above JMA line = bullish, below =
+    bearish — like the EMA62), which beat the slope-colour as a filter.
 
     State machine per symbol, evaluated statelessly on the last CLOSED bar:
       retest_setup   — filtered body cross of the EMA13: body across +
-                       close beyond EMA62 + decisive close (≥0.3×ATR beyond
-                       the EMA13) + not a weekend bar.
-                       Plan: limit at EMA13, stop 1×ATR, TP 1.5R / 2R.
-      retest_trigger — first touch of the EMA13 within k_retest bars of the
+                       close beyond EMA62 + price beyond the Megatrend line +
+                       decisive close (≥0.3×ATR beyond EMA13) + not weekend.
+                       Plan: limit at EMA5, stop 1×ATR, TP 1.5R / 2R.
+      retest_trigger — first touch of the EMA5 within k_retest bars of the
                        most recent filtered cross (the validated entry).
       retest_cancel  — candle body closed back across the EMA13 before any
-                       touch: setup is void.
-    Weekend bars (Sat/Sun UTC) neither create setups nor fire triggers —
-    weekend trades tested worse and forex is closed for the user anyway.
+                       EMA5 touch: setup is void.
+    Weekend bars (Sat/Sun UTC) neither create setups nor fire triggers.
     Deduplication is per candle via the normal fingerprint mechanism.
     """
     if len(df) < 70:
@@ -399,8 +401,10 @@ def detect_ema13_retest(
     c   = df["close"].values
     h   = df["high"].values
     l   = df["low"].values
+    e5  = df["e5"].values
     e13 = df["e13"].values
     e62 = df["e62"].values
+    jma = df["jma"].values          # Megatrend line — used as a level, not colour
     atr = df["atr14"].values
     mtb = df["mt_bull"].values
     dow = df["timestamp"].dt.dayofweek.values if "timestamp" in df.columns else None
@@ -419,9 +423,10 @@ def detect_ema13_retest(
         strong = abs(c[t] - e13[t]) >= 0.3 * atr[t]  # decisive close beyond EMA13
         if not strong:
             return None
-        if o[t] < e13[t] and c[t] > e13[t] and c[t] > e62[t]:
+        # trend filters: close beyond EMA62 AND beyond the Megatrend line
+        if o[t] < e13[t] and c[t] > e13[t] and c[t] > e62[t] and c[t] > jma[t]:
             return "BUY"
-        if o[t] > e13[t] and c[t] < e13[t] and c[t] < e62[t]:
+        if o[t] > e13[t] and c[t] < e13[t] and c[t] < e62[t] and c[t] < jma[t]:
             return "SELL"
         return None
 
@@ -430,7 +435,7 @@ def detect_ema13_retest(
         dist = 1.0 * atr_v
         return Signal(
             symbol=symbol, direction=direction, source=source,
-            close_price=float(c[j]), ema5=0.0, ema13=float(level), ema62=float(e62[j]),
+            close_price=float(c[j]), ema5=float(level), ema13=float(e13[j]), ema62=float(e62[j]),
             candle_ts=ts, signal_type=sig_type, mt_bull=bool(mtb[j]),
             entry=float(level), stop=float(level - sign * dist),
             tp1=float(level + sign * dist * 1.5), tp2=float(level + sign * dist * 2.0),
@@ -438,9 +443,10 @@ def detect_ema13_retest(
         )
 
     # 1) Is the last closed bar itself a fresh filtered cross? → SETUP
+    #    Retest target is the EMA5 (shallow pullback = stronger continuation).
     d = filtered_cross(j)
     if d and atr[j] > 0:
-        return build("retest_setup", d, e13[j], atr[j])
+        return build("retest_setup", d, e5[j], atr[j])
 
     # 2) Otherwise: is there an active setup whose first event lands on bar j?
     for i in range(j - 1, max(j - 1 - k_retest, 69), -1):
@@ -452,16 +458,16 @@ def detect_ema13_retest(
 
     is_long = d == "BUY"
     for t in range(i + 1, j + 1):
-        touched      = (l[t] <= e13[t]) if is_long else (h[t] >= e13[t])
-        crossed_back = (c[t] < e13[t])  if is_long else (c[t] > e13[t])
+        touched      = (l[t] <= e5[t])  if is_long else (h[t] >= e5[t])   # EMA5 retest
+        crossed_back = (c[t] < e13[t])  if is_long else (c[t] > e13[t])   # EMA13 = void line
         if touched:
-            # first touch — only alert if it happened on the newest closed bar
+            # first EMA5 touch — only alert if it happened on the newest closed bar
             if t == j and atr[j] > 0:
-                return build("retest_trigger", d, e13[j], atr[j])
+                return build("retest_trigger", d, e5[j], atr[j])
             return None
         if crossed_back:
             if t == j:
-                return build("retest_cancel", d, e13[j], atr[j])
+                return build("retest_cancel", d, e5[j], atr[j])
             return None
 
     return None
