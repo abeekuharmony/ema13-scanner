@@ -72,33 +72,27 @@ async def scan_job() -> None:
 
         for sym, df in mexc_data.items():
             try:
-                # EMA cross
+                # ── Only two trend-filtered signal families are sent ──────
+                # (unfiltered EMA13 body-cross and standalone Megatrend-flip
+                #  alerts are MUTED — they fired BUYs against the trend.
+                #  detect_ema13_body_cross / detect_mt_flip_signal remain in
+                #  indicators.py if ever needed again.)
+
+                # 1) STRONG BUY/SELL only: EMA5/13 cross that AGREES with the
+                #    Megatrend (plain "early entry" crosses are dropped).
                 sig = detect_signal(
                     df, symbol=sym, source="mexc",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                     atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
                 )
-                if sig and _is_new(sig):
-                    new_signals.append(sig)
+                if sig:
+                    confirmed = (sig.direction == "BUY" and sig.mt_bull) or \
+                                (sig.direction == "SELL" and not sig.mt_bull)
+                    if confirmed and _is_new(sig):
+                        new_signals.append(sig)
 
-                # Megatrend colour flip
-                mt_sig = detect_mt_flip_signal(
-                    df, symbol=sym, source="mexc",
-                    atr_len=settings.mt_atr_len, multiplier=settings.mt_multiplier,
-                )
-                if mt_sig and _is_new(mt_sig):
-                    new_signals.append(mt_sig)
-
-                # EMA13 body cross — candle body closed across the EMA13
-                body_sig = detect_ema13_body_cross(
-                    df, symbol=sym, source="mexc",
-                    fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
-                )
-                if body_sig and _is_new(body_sig):
-                    new_signals.append(body_sig)
-
-                # EMA13 retest strategy — setup / trigger / cancel
-                # (backtested: pullback entry after a filtered body cross)
+                # 2) EMA5 retest strategy — the validated edge
+                #    (body cross + EMA62 + Megatrend-level + decisive, then EMA5 pullback)
                 rt_sig = detect_ema13_retest(
                     df, symbol=sym, source="mexc",
                     fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
