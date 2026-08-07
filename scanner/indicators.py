@@ -17,6 +17,7 @@ class Signal:
     signal_type: str = "ema_cross" # "ema_cross" | "mt_flip" | "ema13_body_cross" | "retest_setup" | "retest_trigger" | "retest_cancel"
     mt_bull: bool = True           # Megatrend state at signal time
     open_price: float = 0.0        # candle open (used by ema13_body_cross alerts)
+    timeframe: str = ""            # "15m" | "1H" — which timeframe the signal is on
     entry: float = 0.0             # retest trade plan: limit entry at EMA13
     stop: float = 0.0              # retest trade plan: 1×ATR beyond entry
     tp1: float = 0.0               # retest trade plan: 1.5R target

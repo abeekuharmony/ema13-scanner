@@ -125,8 +125,9 @@ def format_signal(signal: Signal) -> str:
         move   = "opened below, closed above" if signal.direction == "BUY" else "opened above, closed below"
         open_s = _fmt_price(signal.open_price)
         e13_s  = _fmt_price(signal.ema13)
+        tf     = f" · {signal.timeframe}" if signal.timeframe else ""
         return (
-            f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross]\n"
+            f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross{tf}]\n"
             f"    Candle {move} the EMA13\n"
             f"    Open: {open_s}  →  Close: {close_s}\n"
             f"    EMA13: {e13_s}"
@@ -136,45 +137,19 @@ def format_signal(signal: Signal) -> str:
 
 
 def build_alert_message(signals: list[Signal]) -> str:
+    """One signal type now: EMA13 body cross on 15m / 1H."""
     if not signals:
         return ""
 
-    ema_crosses = [s for s in signals if s.signal_type == "ema_cross"]
-    mt_flips    = [s for s in signals if s.signal_type == "mt_flip"]
-    body_cross  = [s for s in signals if s.signal_type == "ema13_body_cross"]
-    retests     = [s for s in signals if s.signal_type.startswith("retest_")]
-
-    buys    = [s for s in ema_crosses if s.direction == "BUY"]
-    sells   = [s for s in ema_crosses if s.direction == "SELL"]
-    greens  = [s for s in mt_flips    if s.direction == "GREEN"]
-    reds    = [s for s in mt_flips    if s.direction == "RED"]
-    bc_buys  = [s for s in body_cross if s.direction == "BUY"]
-    bc_sells = [s for s in body_cross if s.direction == "SELL"]
-    rt_trig  = [s for s in retests if s.signal_type == "retest_trigger"]
-    rt_setup = [s for s in retests if s.signal_type == "retest_setup"]
-    rt_canc  = [s for s in retests if s.signal_type == "retest_cancel"]
-
-    # Build summary line
-    parts = []
-    if retests:
-        parts.append(f"{len(rt_trig)} trig / {len(rt_setup)} setup / {len(rt_canc)} cancel [Retest]")
-    if ema_crosses:
-        parts.append(f"{len(buys)} BUY / {len(sells)} SELL [EMA Cross]")
-    if body_cross:
-        parts.append(f"{len(bc_buys)} BUY / {len(bc_sells)} SELL [EMA13 Body]")
-    if mt_flips:
-        parts.append(f"{len(greens)} Green / {len(reds)} Red [MT Flip]")
-    summary = "  |  ".join(parts)
+    buys  = [s for s in signals if s.direction == "BUY"]
+    sells = [s for s in signals if s.direction == "SELL"]
 
     header = (
-        "<b>5/13/62 Signal Alert</b>\n"
-        f"<i>{len(signals)} signal(s) on 1H — {summary}</i>\n"
+        "<b>EMA13 Body-Cross Alert</b>\n"
+        f"<i>{len(buys)} BUY / {len(sells)} SELL — closed candle across EMA13</i>\n"
         + "─" * 25 + "\n\n"
     )
-
-    # Order: retest triggers first (most actionable) → setups → EMA crosses
-    #        → body crosses → MT flips → retest cancels
-    ordered = rt_trig + rt_setup + buys + sells + bc_buys + bc_sells + greens + reds + rt_canc
+    ordered = buys + sells
     body = "\n\n".join(format_signal(s) for s in ordered)
     return header + body
 
