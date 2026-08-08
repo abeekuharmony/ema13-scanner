@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     candle_limit: int = 200
 
     # Timeframes scanned each run: (MEXC interval code, display label).
-    # 15m is checked every scan; 1H only changes on the hour (dedup handles it).
-    scan_timeframes: list[tuple[str, str]] = [("Min15", "15m"), ("Min60", "1H")]
+    # 15m removed (too noisy) — 1H only. Re-add ("Min15","15m") to restore.
+    scan_timeframes: list[tuple[str, str]] = [("Min60", "1H")]
 
     # ── EMA period (only the EMA13 is used for the body-cross signal) ──
     ema_fast: int = 5
