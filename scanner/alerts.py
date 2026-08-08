@@ -126,8 +126,9 @@ def format_signal(signal: Signal) -> str:
         open_s = _fmt_price(signal.open_price)
         e13_s  = _fmt_price(signal.ema13)
         tf     = f" · {signal.timeframe}" if signal.timeframe else ""
+        sess   = f" · {signal.session}" if signal.session else ""
         return (
-            f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross{tf}]\n"
+            f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross{tf}{sess}]\n"
             f"    Candle {move} the EMA13\n"
             f"    Open: {open_s}  →  Close: {close_s}\n"
             f"    EMA13: {e13_s}"

@@ -22,6 +22,21 @@ class Settings(BaseSettings):
     # 15m removed (too noisy) — 1H only. Re-add ("Min15","15m") to restore.
     scan_timeframes: list[tuple[str, str]] = [("Min60", "1H")]
 
+    # Per-pair BEST trading sessions (UTC hour windows [start, end), by the
+    # candle's OPEN hour). From the 12-month session backtest (TEST A): a
+    # signal only alerts if its candle falls in one of the pair's windows.
+    # Accra/GMT = UTC+0, so these hours are the user's local time.
+    #   Asia 0-7 | London 7-12 | London/NY overlap 12-16 | NY-PM 16-21 | off 21-24
+    session_windows: dict[str, list[tuple[int, int]]] = {
+        "XAUT_USDT":   [(0, 7), (12, 16)],   # gold: Asia + overlap (PF 1.76 / 1.64)
+        "BTC_USDT":    [(0, 16)],            # Asia+London+overlap all >1.5
+        "ETH_USDT":    [(7, 16)],            # London + overlap (PF 1.80 / 1.90)
+        "SILVER_USDT": [(7, 16)],            # London + overlap (PF 2.60 / 3.69)
+        "NAS100_USDT": [(12, 16)],           # overlap only (PF 2.71)
+        "SPX500_USDT": [(7, 16)],            # London + overlap (PF 1.70 / 1.59)
+        "USOIL_USDT":  [(0, 7), (12, 21)],   # Asia + overlap + NY-PM
+    }
+
     # ── EMA period (only the EMA13 is used for the body-cross signal) ──
     ema_fast: int = 5
     ema_mid: int = 13

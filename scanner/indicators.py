@@ -18,6 +18,7 @@ class Signal:
     mt_bull: bool = True           # Megatrend state at signal time
     open_price: float = 0.0        # candle open (used by ema13_body_cross alerts)
     timeframe: str = ""            # "15m" | "1H" — which timeframe the signal is on
+    session: str = ""              # trading session the signal candle fell in
     entry: float = 0.0             # retest trade plan: limit entry at EMA13
     stop: float = 0.0              # retest trade plan: 1×ATR beyond entry
     tp1: float = 0.0               # retest trade plan: 1.5R target

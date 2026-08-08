@@ -38,6 +38,23 @@ def _save_dedup() -> None:
         logger.warning(f"Could not save dedup state: {exc}")
 
 
+def _in_session(symbol: str, hour: int) -> bool:
+    """True if the UTC hour is within one of the pair's best-session windows.
+    Symbols with no window defined are allowed at all hours."""
+    windows = settings.session_windows.get(symbol)
+    if not windows:
+        return True
+    return any(start <= hour < end for start, end in windows)
+
+
+def _session_name(hour: int) -> str:
+    if 0 <= hour < 7:   return "Asia"
+    if 7 <= hour < 12:  return "London"
+    if 12 <= hour < 16: return "London/NY"
+    if 16 <= hour < 21: return "NY-PM"
+    return "Off-hours"
+
+
 async def scan_job() -> None:
     """
     Main scan job — runs every 15 minutes (:00, :15, :30, :45).
@@ -69,7 +86,13 @@ async def scan_job() -> None:
                         fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                     )
                     if sig:
+                        # Session filter: only alert if the signal candle's
+                        # (UTC = local) open hour is in this pair's best window.
+                        hour = int(df["timestamp"].iloc[-1].hour)
+                        if not _in_session(sym, hour):
+                            continue
                         sig.timeframe = label
+                        sig.session   = _session_name(hour)
                         if _is_new(sig):
                             new_signals.append(sig)
                 except Exception as e:
