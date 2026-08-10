@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scanner.config import settings
-from scanner.exchanges import fetch_all_mexc
+from scanner.exchanges import fetch_all_oanda
 from scanner.indicators import detect_ema13_body_cross, Signal
 from scanner.alerts import send_alerts
 
@@ -73,16 +73,17 @@ async def scan_job() -> None:
     logger.info(f"Scan started at {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     new_signals: list[Signal] = []
 
-    for interval, label in settings.scan_timeframes:
+    for granularity, label in settings.scan_timeframes:
         try:
-            logger.info(f"Scanning {len(settings.mexc_symbols)} pairs on {label}")
-            mexc_data = await fetch_all_mexc(
-                settings.mexc_symbols, interval=interval, limit=settings.candle_limit,
+            instruments = list(settings.oanda_symbols.keys())
+            logger.info(f"Scanning {len(instruments)} OANDA instruments on {label}")
+            oanda_data = await fetch_all_oanda(
+                instruments, granularity=granularity, count=settings.candle_limit,
             )
-            for sym, df in mexc_data.items():
+            for sym, df in oanda_data.items():
                 try:
                     sig = detect_ema13_body_cross(
-                        df, symbol=sym, source="mexc",
+                        df, symbol=sym, source="oanda",
                         fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                     )
                     if sig:

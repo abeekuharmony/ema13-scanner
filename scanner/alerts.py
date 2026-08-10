@@ -10,9 +10,11 @@ logger = logging.getLogger(__name__)
 
 def _fmt_symbol(symbol: str, source: str) -> str:
     """Convert internal symbol to a clean display name."""
+    if source == "oanda":
+        return settings.oanda_symbols.get(symbol, symbol.replace("_", "/"))
     if source == "mexc":
         return symbol.replace("_", "/") + " (Perp)"
-    return symbol  # yfinance symbols are already like EUR/USD
+    return symbol
 
 
 def _fmt_price(price: float) -> str:

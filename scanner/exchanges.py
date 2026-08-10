@@ -13,6 +13,70 @@ logger = logging.getLogger(__name__)
 
 MEXC_CONTRACT_BASE = "https://contract.mexc.com"
 
+# ── OANDA v20 (real forex/metals/indices feed — matches the user's chart) ──
+OANDA_HOSTS = {
+    "practice": "https://api-fxpractice.oanda.com",
+    "live":     "https://api-fxtrade.oanda.com",
+}
+
+
+async def fetch_oanda_ohlcv(
+    instrument: str, granularity: str = "H1", count: int = 200
+) -> pd.DataFrame | None:
+    """
+    Fetch candles from the OANDA v20 API. granularity: "M15", "H1", etc.
+    Only COMPLETE (closed) candles are returned — OANDA's `complete` flag is
+    the exact, authoritative version of the repaint fix. `time` is the candle
+    OPEN time (UTC). Auth token comes from OANDA_API_TOKEN (never hard-coded).
+    """
+    token = settings.oanda_api_token
+    if not token:
+        logger.error("OANDA_API_TOKEN is not set — add it to the environment.")
+        return None
+
+    host = OANDA_HOSTS.get(settings.oanda_env, OANDA_HOSTS["practice"])
+    url = f"{host}/v3/instruments/{instrument}/candles"
+    params = {"granularity": granularity, "count": count, "price": "M"}
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            candles = [c for c in resp.json().get("candles", []) if c.get("complete")]
+            if not candles:
+                return None
+            df = pd.DataFrame({
+                "timestamp": pd.to_datetime([c["time"] for c in candles], utc=True, format="ISO8601"),
+                "open":   [float(c["mid"]["o"]) for c in candles],
+                "high":   [float(c["mid"]["h"]) for c in candles],
+                "low":    [float(c["mid"]["l"]) for c in candles],
+                "close":  [float(c["mid"]["c"]) for c in candles],
+                "volume": [float(c.get("volume", 0)) for c in candles],
+            })
+            return df.sort_values("timestamp").reset_index(drop=True)
+        except Exception as e:
+            logger.error(f"OANDA fetch failed for {instrument} [{granularity}]: {e}")
+            return None
+
+
+async def fetch_all_oanda(
+    instruments: list[str], granularity: str = "H1", count: int = 200
+) -> dict[str, pd.DataFrame]:
+    """Fetch OANDA candles for multiple instruments concurrently (rate-limited)."""
+    semaphore = asyncio.Semaphore(5)
+    results: dict[str, pd.DataFrame] = {}
+
+    async def _one(inst: str) -> None:
+        async with semaphore:
+            df = await fetch_oanda_ohlcv(inst, granularity, count)
+            if df is not None:
+                results[inst] = df
+            await asyncio.sleep(0.1)
+
+    await asyncio.gather(*[_one(i) for i in instruments])
+    return results
+
 # MEXC interval → seconds per candle (used to drop the still-forming candle)
 _INTERVAL_SECONDS = {
     "Min1": 60, "Min5": 300, "Min15": 900, "Min30": 1800,
