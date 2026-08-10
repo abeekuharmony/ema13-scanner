@@ -127,9 +127,21 @@ def format_signal(signal: Signal) -> str:
         e13_s  = _fmt_price(signal.ema13)
         tf     = f" · {signal.timeframe}" if signal.timeframe else ""
         sess   = f" · {signal.session}" if signal.session else ""
+        # Exact candle this signal refers to — the candle that just CLOSED,
+        # not the one forming now. Shown in UTC to end which-candle confusion.
+        cand = ""
+        if signal.candle_ts:
+            d  = signal.candle_ts[:10]
+            hh = signal.candle_ts[11:13]
+            try:
+                ch = f"{(int(hh) + 1) % 24:02d}"
+            except ValueError:
+                ch = "??"
+            cand = f"\n    Signal candle (CLOSED): {hh}:00→{ch}:00 UTC, {d}"
         return (
             f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross{tf}{sess}]\n"
-            f"    Candle {move} the EMA13\n"
+            f"    Candle {move} the EMA13"
+            f"{cand}\n"
             f"    Open: {open_s}  →  Close: {close_s}\n"
             f"    EMA13: {e13_s}"
         )
