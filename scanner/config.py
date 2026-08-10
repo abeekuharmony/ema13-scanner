@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         "USOIL_USDT":  [(0, 7), (12, 21)],   # Asia + overlap + NY-PM
     }
 
+    # Symbols that alert in ALL hours: signals inside session_windows are
+    # normal; signals OUTSIDE (dead hours) still fire but are flagged
+    # "low-probability — trade cautiously". Other symbols stay muted
+    # outside their windows.
+    session_alert_all: list[str] = ["XAUT_USDT"]  # gold: alert 24h, tag dead hours
+
     # ── EMA period (only the EMA13 is used for the body-cross signal) ──
     ema_fast: int = 5
     ema_mid: int = 13

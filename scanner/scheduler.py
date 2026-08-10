@@ -86,13 +86,17 @@ async def scan_job() -> None:
                         fast=settings.ema_fast, mid=settings.ema_mid, slow=settings.ema_slow,
                     )
                     if sig:
-                        # Session filter: only alert if the signal candle's
-                        # (UTC = local) open hour is in this pair's best window.
-                        hour = int(df["timestamp"].iloc[-1].hour)
-                        if not _in_session(sym, hour):
+                        # Session filter (UTC = user's local time).
+                        hour     = int(df["timestamp"].iloc[-1].hour)
+                        in_prime = _in_session(sym, hour)
+                        # Muted unless in a best window — EXCEPT symbols in
+                        # session_alert_all (gold), which alert 24h with the
+                        # dead-hour ones flagged low-probability.
+                        if not in_prime and sym not in settings.session_alert_all:
                             continue
                         sig.timeframe = label
                         sig.session   = _session_name(hour)
+                        sig.low_prob  = not in_prime
                         if _is_new(sig):
                             new_signals.append(sig)
                 except Exception as e:

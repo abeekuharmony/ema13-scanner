@@ -138,12 +138,14 @@ def format_signal(signal: Signal) -> str:
             except ValueError:
                 ch = "??"
             cand = f"\n    Signal candle (CLOSED): {hh}:00→{ch}:00 UTC, {d}"
+        warn = "\n    ⚠️ LOW-PROBABILITY (dead hours) — trade cautiously" if signal.low_prob else ""
         return (
             f"{emoji} <b>{sym}</b>  {arrow}  [EMA13 Body Cross{tf}{sess}]\n"
             f"    Candle {move} the EMA13"
             f"{cand}\n"
             f"    Open: {open_s}  →  Close: {close_s}\n"
             f"    EMA13: {e13_s}"
+            f"{warn}"
         )
 
     return f"<b>{sym}</b> — unknown signal type"
