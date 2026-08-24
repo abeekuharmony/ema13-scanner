@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import json
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -188,12 +189,20 @@ def connect():
     return True
 
 
-def detect_offset(sym):
-    mt5.symbol_select(sym, True)
-    tk = mt5.symbol_info_tick(sym)
-    if tk and tk.time:
-        return round((tk.time - time.time()) / 3600)
-    return 0
+def detect_offset(symbols):
+    """Server-vs-UTC hour offset, taken as the value MOST symbols agree on.
+    A single symbol can be mid session-break (stale tick, e.g. gold ~21-22 UTC)
+    and read 1h off; crypto trades 24/7, so the modal offset is the true one."""
+    now = time.time()
+    offs = []
+    for sym in symbols:
+        mt5.symbol_select(sym, True)
+        tk = mt5.symbol_info_tick(sym)
+        if tk and tk.time:
+            offs.append(round((tk.time - now) / 3600))
+    if not offs:
+        return 0
+    return Counter(offs).most_common(1)[0][0]
 
 
 def check(sym, disp, win, is_demo, offset, dedup, news):
@@ -310,7 +319,7 @@ def main():
         else: log("demo symbol not on this account (skipped): %s" % base)
     log("Scanning %d symbols (%d live, %d demo)" % (
         len(pairs), sum(1 for p in pairs if not p[3]), sum(1 for p in pairs if p[3])))
-    offset = detect_offset(pairs[0][0]) if pairs else 0
+    offset = detect_offset([p[0] for p in pairs]) if pairs else 0
     log("Server offset vs UTC: %+d h" % offset)
     dedup = load_dedup()
     while True:
