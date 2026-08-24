@@ -1,28 +1,27 @@
 """
-mt5_alert_bot.py — EMA13 body-cross alerts on REAL Exness MT5 data.
+mt5_alert_bot.py — FULL-STACK entry alerts on real Exness MT5 data.
 
-Runs 24/7 on a Windows VPS with MetaTrader 5 open and logged into Exness.
-One signal: a candle whose BODY closes across the EMA13 on the last CLOSED
-1H candle (open one side, close the other; wicks ignored). Each pair only
-alerts during its best sessions (from the 12-month Exness backtest); gold
-alerts 24h with dead-hour signals flagged low-probability.
+Signal: session window -> EMA13 body cross -> recent same-direction Megatrend
+(JMA slope) flip -> EMA5 pullback touch = entry. Swing-low/high stop, 3R target.
+Two tiers: LIVE (validated pairs) and FORWARD-TEST (demo-only, tagged).
+Optional news flag when a high-impact event is near (needs FMP_API_KEY).
 
 Setup (PowerShell on the VPS):
     py -m pip install MetaTrader5 pandas numpy python-dotenv requests
-Create a file named ".env" next to this script containing:
-    TELEGRAM_BOT_TOKEN=your_token_here
-    TELEGRAM_CHAT_ID=your_chat_id_here
-Run:
-    py mt5_alert_bot.py
+.env next to this script:
+    TELEGRAM_BOT_TOKEN=...
+    TELEGRAM_CHAT_ID=...
+    FMP_API_KEY=...        (optional — for the news flag)
+Run:  py mt5_alert_bot.py
 """
 import os
 import sys
 import time
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import numpy as np  # noqa: F401 (kept for parity / future use)
+import numpy as np  # noqa: F401
 import pandas as pd
 import requests
 import MetaTrader5 as mt5
@@ -31,60 +30,74 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
-
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-# ── Config ────────────────────────────────────────────────────────────
 EXNESS_PATH        = r"C:\Program Files\MetaTrader 5\terminal64.exe"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+FMP_API_KEY        = os.getenv("FMP_API_KEY", "")
 SCAN_EVERY_MIN     = 15
-EMA_MID            = 13
-CANDLES            = 200
+CANDLES            = 260
+K_RETEST           = 12          # bars allowed for the pullback
+NEAR_FLIP          = 4           # Megatrend flip must be within N bars before the cross
+SWING_LB           = 10
+NEWS_WINDOW_H      = 3.0         # flag events within +/- this many hours
 DEDUP_FILE         = Path(__file__).with_name("dedup_state.json")
 
-# Exness symbol -> display name (12 validated pairs)
-SYMBOLS = {
-    "XAUUSDm": "XAU/USD", "XAGUSDm": "XAG/USD",
-    "BTCUSDm": "BTC/USD", "ETHUSDm": "ETH/USD", "SOLUSDm": "SOL/USD",
-    "XRPUSDm": "XRP/USD", "DOGEUSDm": "DOGE/USD", "LINKUSDm": "LINK/USD",
-    "BNBUSDm": "BNB/USD",
-    "USTECm": "US100", "US500m": "US500", "USOILm": "USOIL",
+# base name -> (display, session windows UTC or None=all-hours)
+LIVE = {
+    "XAUUSD": ("XAU/USD", [(0, 21)]),
+    "XAGUSD": ("XAG/USD", [(0, 21)]),
+    "BTCUSD": ("BTC/USD", [(0, 7), (12, 16)]),
+    "ETHUSD": ("ETH/USD", [(7, 21)]),
+    "SOLUSD": ("SOL/USD", [(0, 7), (12, 24)]),
+    "XRPUSD": ("XRP/USD", [(7, 21)]),
+    "DOGEUSD": ("DOGE/USD", [(0, 16), (21, 24)]),
+    "LINKUSD": ("LINK/USD", [(7, 21)]),
+    "BNBUSD": ("BNB/USD", [(0, 7), (12, 24)]),
+}
+DEMO = {
+    "USTEC":  ("US100", None), "US500": ("US500", None),
+    "ADAUSD": ("ADA/USD", None), "XLMUSD": ("XLM/USD", None),
+    "ALGOUSD": ("ALGO/USD", None), "HBARUSD": ("HBAR/USD", None),
+    "XMRUSD": ("XMR/USD", None), "SLXUSD": ("SLX/USD", None),
 }
 
-# Best-session windows (UTC hour [start, end) on the candle's open hour),
-# from the 12-month Exness backtest. UTC = user's Accra local time.
-SESSION_WINDOWS = {
-    "XAUUSDm":  [(0, 21)],
-    "XAGUSDm":  [(0, 21)],
-    "BTCUSDm":  [(0, 7), (12, 16)],
-    "ETHUSDm":  [(7, 21)],
-    "SOLUSDm":  [(0, 7), (12, 24)],
-    "XRPUSDm":  [(7, 21)],
-    "DOGEUSDm": [(0, 16), (21, 24)],
-    "LINKUSDm": [(7, 21)],
-    "BNBUSDm":  [(0, 7), (12, 24)],
-    "USTECm":   [(12, 16)],
-    "US500m":   [(12, 21)],
-    "USOILm":   [(12, 21)],
-}
-# Symbols that alert in ALL hours; out-of-window signals flagged low-probability
-ALERT_ALL = ["XAUUSDm"]
+
+def log(m):
+    print("%s  %s" % (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), m), flush=True)
 
 
-def log(msg):
-    print("%s  %s" % (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), msg), flush=True)
+def resolve(names, base):
+    for n in names:
+        if n.upper() == base:
+            return n
+    hits = [n for n in names if base in n.upper()]
+    return sorted(set(hits), key=len)[0] if hits else None
 
 
-def in_window(sym, hour):
-    w = SESSION_WINDOWS.get(sym)
-    if not w:
+def jma(src, length=14, phase=100, power=1):
+    pr = 2.5
+    beta = 0.45 * (length - 1) / (0.45 * (length - 1) + 2)
+    a = beta ** power
+    n = len(src); e0 = np.zeros(n); e1 = np.zeros(n); e2 = np.zeros(n); o = np.zeros(n)
+    e0[0] = src[0]; o[0] = src[0]
+    for i in range(1, n):
+        e0[i] = (1 - a) * src[i] + a * e0[i - 1]
+        e1[i] = (src[i] - e0[i]) * (1 - beta) + beta * e1[i - 1]
+        e2[i] = (e0[i] + pr * e1[i] - o[i - 1]) * (1 - a) ** 2 + a ** 2 * e2[i - 1]
+        o[i] = e2[i] + o[i - 1]
+    return o
+
+
+def in_window(win, hour):
+    if not win:
         return True
-    return any(a <= hour < b for a, b in w)
+    return any(a <= hour < b for a, b in win)
 
 
 def session_name(hour):
@@ -93,6 +106,14 @@ def session_name(hour):
     if 12 <= hour < 16: return "London/NY"
     if 16 <= hour < 21: return "NY-PM"
     return "Off-hours"
+
+
+def fmt(v):
+    if v >= 100:
+        return "{:,.2f}".format(v)
+    if v >= 1:
+        return "{:.4f}".format(v)
+    return "{:.6f}".format(v)
 
 
 def load_dedup():
@@ -105,9 +126,8 @@ def load_dedup():
 
 
 def save_dedup(d):
-    # keep it from growing forever
-    if len(d) > 3000:
-        d = dict(list(d.items())[-1500:])
+    if len(d) > 4000:
+        d = dict(list(d.items())[-2000:])
     try:
         DEDUP_FILE.write_text(json.dumps(d), encoding="utf-8")
     except Exception as e:
@@ -115,125 +135,210 @@ def save_dedup(d):
     return d
 
 
-def fmt(v):
-    if v >= 100:
-        return "{:,.2f}".format(v)
-    if v >= 1:
-        return "{:.4f}".format(v)
-    return "{:.6f}".format(v)
-
-
 def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log("Telegram not configured — alert below:\n" + text)
-        return
+        log("Telegram not configured — alert below:\n" + text); return
     try:
-        r = requests.post(
-            "https://api.telegram.org/bot%s/sendMessage" % TELEGRAM_BOT_TOKEN,
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=30,
-        )
+        r = requests.post("https://api.telegram.org/bot%s/sendMessage" % TELEGRAM_BOT_TOKEN,
+                          json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
+                                "disable_web_page_preview": True}, timeout=30)
         if not r.ok or not r.json().get("ok"):
             log("Telegram API error: %s" % r.text)
     except Exception as e:
         log("Telegram send failed: %s" % e)
 
 
+_news_cache = {"ts": 0, "events": []}
+def upcoming_news():
+    """High-impact events within +/- NEWS_WINDOW_H hours. Optional (needs FMP key)."""
+    if not FMP_API_KEY:
+        return None
+    now = time.time()
+    if now - _news_cache["ts"] > 1800:                       # refresh every 30 min
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            tmr = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+            r = requests.get("https://financialmodelingprep.com/api/v3/economic_calendar",
+                             params={"from": today, "to": tmr, "apikey": FMP_API_KEY}, timeout=20)
+            ev = []
+            for e in r.json():
+                if str(e.get("impact", "")).lower() == "high":
+                    try:
+                        t = datetime.fromisoformat(e["date"].replace("Z", "+00:00"))
+                        if t.tzinfo is None:
+                            t = t.replace(tzinfo=timezone.utc)
+                        ev.append((t.timestamp(), "%s %s" % (e.get("country", ""), e.get("event", ""))))
+                    except Exception:
+                        pass
+            _news_cache["events"] = ev; _news_cache["ts"] = now
+        except Exception as e:
+            log("news fetch failed: %s" % e)
+    for ts, name in _news_cache["events"]:
+        if abs(ts - time.time()) <= NEWS_WINDOW_H * 3600:
+            return name
+    return None
+
+
 def connect():
     if not mt5.initialize(path=EXNESS_PATH):
-        log("MT5 initialize failed: %s" % (mt5.last_error(),))
-        return False
+        log("MT5 init failed: %s" % (mt5.last_error(),)); return False
     acc = mt5.account_info()
     if acc:
         log("Connected -> %s | %s" % (acc.company, acc.server))
     return True
 
 
-def detect_offset():
-    for s in SYMBOLS:
-        mt5.symbol_select(s, True)
-        tk = mt5.symbol_info_tick(s)
-        if tk and tk.time:
-            return round((tk.time - time.time()) / 3600)
+def detect_offset(sym):
+    mt5.symbol_select(sym, True)
+    tk = mt5.symbol_info_tick(sym)
+    if tk and tk.time:
+        return round((tk.time - time.time()) / 3600)
     return 0
 
 
-def check_symbol(sym, offset, dedup):
+def check(sym, disp, win, is_demo, offset, dedup, news):
     mt5.symbol_select(sym, True)
     rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_H1, 0, CANDLES)
-    if rates is None or len(rates) < EMA_MID + 3:
+    if rates is None or len(rates) < 80:
         return None
     df = pd.DataFrame(rates)
     server_now = time.time() + offset * 3600
-    df = df[df["time"] + 3600 <= server_now]            # closed candles only
-    if len(df) < EMA_MID + 2:
+    df = df[df["time"] + 3600 <= server_now].reset_index(drop=True)   # closed candles only
+    n = len(df)
+    if n < 75:
         return None
-    df["e13"] = df["close"].ewm(span=EMA_MID, adjust=False).mean()
-    cur = df.iloc[-1]
-    o, c, e13 = float(cur["open"]), float(cur["close"]), float(cur["e13"])
-    if o < e13 and c > e13:
-        direction = "BUY"
-    elif o > e13 and c < e13:
-        direction = "SELL"
-    else:
+    o, h, l, c = (df[x].values for x in ["open", "high", "low", "close"])
+    e5 = df["close"].ewm(span=5, adjust=False).mean().values
+    e13 = df["close"].ewm(span=13, adjust=False).mean().values
+    tr = pd.concat([df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(),
+                    (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(com=13, adjust=False).mean().values
+    jm = jma(((df["high"] + df["low"] + df["close"]) / 3).values)
+    bull = np.ones(n, bool)
+    for i in range(1, n):
+        bull[i] = jm[i] > jm[i - 1] if jm[i] != jm[i - 1] else bull[i - 1]
+    fg = np.zeros(n, bool); frd = np.zeros(n, bool)
+    for i in range(1, n):
+        if bull[i] and not bull[i - 1]: fg[i] = True
+        if not bull[i] and bull[i - 1]: frd[i] = True
+    utc = (df["time"].values - offset * 3600)
+    hr = ((utc // 3600) % 24).astype(int)
+    j = n - 1
+
+    def qualifying_cross(t):
+        if np.isnan(atr[t]) or atr[t] <= 0:
+            return None
+        if not in_window(win, int(hr[t])):
+            return None
+        if o[t] < e13[t] and c[t] > e13[t] and fg[max(0, t - NEAR_FLIP):t + 1].any():
+            return "BUY"
+        if o[t] > e13[t] and c[t] < e13[t] and frd[max(0, t - NEAR_FLIP):t + 1].any():
+            return "SELL"
         return None
 
-    open_utc = int(cur["time"]) - offset * 3600         # candle open in UTC
-    hour = (open_utc // 3600) % 24
-    in_prime = in_window(sym, hour)
-    if not in_prime and sym not in ALERT_ALL:
-        return None
+    def build(kind, d, level):
+        sign = 1 if d == "BUY" else -1
+        sw = min(l[j - SWING_LB:j + 1]) if d == "BUY" else max(h[j - SWING_LB:j + 1])
+        stop = sw - 0.1 * atr[j] if d == "BUY" else sw + 0.1 * atr[j]
+        R = abs(level - stop)
+        tp = level + sign * R * 3.0
+        hh = int(hr[j]); ch = (hh + 1) % 24
+        return {"kind": kind, "dir": d, "sym": sym, "disp": disp, "entry": level,
+                "stop": stop, "R": R, "tp": tp, "close": c[j], "hour": hh, "ch": ch,
+                "date": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d"),
+                "session": session_name(hh), "demo": is_demo, "news": news,
+                "cts": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d %H:00")}
 
-    candle_day = datetime.fromtimestamp(open_utc, tz=timezone.utc).strftime("%Y-%m-%d")
-    key = "%s:%s %02d:00" % (sym, candle_day, hour)
-    if dedup.get(key) == direction:
+    # SETUP: this closed bar is itself a qualifying cross
+    d = qualifying_cross(j)
+    if d:
+        return build("SETUP", d, e5[j])
+    # TRIGGER / CANCEL: first EMA5 touch (or void) after a recent qualifying cross
+    i = None
+    for t in range(j - 1, max(j - 1 - K_RETEST, 74), -1):
+        if qualifying_cross(t):
+            i = t; d = qualifying_cross(t); break
+    if i is None:
         return None
-    dedup[key] = direction
+    lng = d == "BUY"
+    for t in range(i + 1, j + 1):
+        touched = (l[t] <= e5[t]) if lng else (h[t] >= e5[t])
+        crossed_back = (c[t] < e13[t]) if lng else (c[t] > e13[t])
+        if touched:
+            return build("TRIGGER", d, e5[j]) if t == j else None
+        if crossed_back:
+            return build("CANCEL", d, e5[j]) if t == j else None
+    return None
 
-    disp  = SYMBOLS.get(sym, sym)
-    emoji = "\U0001F7E2" if direction == "BUY" else "\U0001F534"
-    arrow = "\u25B2 BUY" if direction == "BUY" else "\u25BC SELL"
-    move  = "opened below, closed above" if direction == "BUY" else "opened above, closed below"
-    ch    = (hour + 1) % 24
-    warn  = "\n    \u26A0\uFE0F LOW-PROBABILITY (dead hours) \u2014 trade cautiously" if not in_prime else ""
-    return (
-        "%s <b>%s</b>  %s  [EMA13 Body Cross \u00B7 1H \u00B7 %s]\n"
-        "    Candle %s the EMA13\n"
-        "    Signal candle (CLOSED): %02d:00\u2192%02d:00 UTC, %s\n"
-        "    Open: %s  \u2192  Close: %s\n"
-        "    EMA13: %s%s"
-    ) % (emoji, disp, arrow, session_name(hour), move, hour, ch, candle_day,
-         fmt(o), fmt(c), fmt(e13), warn)
+
+def format_alert(a):
+    is_buy = a["dir"] == "BUY"
+    arrow = "\u25B2 BUY" if is_buy else "\u25BC SELL"
+    demo = "\n    \u26A0\uFE0F FORWARD-TEST \u2014 demo account only" if a["demo"] else ""
+    news = ("\n    \U0001F4F0 News: %s \u2014 trade with caution" % a["news"]) if a["news"] else ""
+    e, s, t, R = fmt(a["entry"]), fmt(a["stop"]), fmt(a["tp"]), fmt(a["R"])
+    cand = "Signal candle (CLOSED): %02d:00\u2192%02d:00 UTC, %s" % (a["hour"], a["ch"], a["date"])
+    if a["kind"] == "SETUP":
+        emoji = "\U0001F7E2" if is_buy else "\U0001F534"
+        return ("%s\U0001F4CB <b>%s</b>  %s  [Full-stack SETUP \u00B7 1H \u00B7 %s]%s\n"
+                "    Cross + Megatrend flip confirmed \u2014 watch for EMA5 pullback\n"
+                "    Place limit \u2248 %s  |  Stop %s (swing, R=%s)\n"
+                "    TP (3R): %s\n    %s%s") % (emoji, a["disp"], arrow, a["session"], demo, e, s, R, t, cand, news)
+    if a["kind"] == "TRIGGER":
+        return ("\U0001F3AF <b>%s</b>  %s  [Full-stack ENTRY \u00B7 1H]%s\n"
+                "    EMA5 pullback tapped \u2014 entry zone\n"
+                "    Entry %s  |  Stop %s (R=%s)  |  TP(3R) %s\n    %s%s") % (
+                a["disp"], arrow, demo, e, s, R, t, cand, news)
+    return ("\u274C <b>%s</b>  %s  [Full-stack VOID]%s\n"
+            "    Body closed back across EMA13 before the pullback\n    Close: %s") % (
+            a["disp"], arrow, demo, fmt(a["close"]))
 
 
 def main():
-    log("MT5 EMA13 body-cross alert bot starting (%d symbols)" % len(SYMBOLS))
+    log("Full-stack MT5 alert bot starting")
     if not connect():
         return
-    offset = detect_offset()
+    names = [x.name for x in mt5.symbols_get()]
+    pairs = []
+    for base, (disp, win) in LIVE.items():
+        r = resolve(names, base)
+        if r: pairs.append((r, disp, win, False))
+        else: log("LIVE symbol not found: %s" % base)
+    for base, (disp, win) in DEMO.items():
+        r = resolve(names, base)
+        if r: pairs.append((r, disp, win, True))
+        else: log("demo symbol not on this account (skipped): %s" % base)
+    log("Scanning %d symbols (%d live, %d demo)" % (
+        len(pairs), sum(1 for p in pairs if not p[3]), sum(1 for p in pairs if p[3])))
+    offset = detect_offset(pairs[0][0]) if pairs else 0
     log("Server offset vs UTC: %+d h" % offset)
     dedup = load_dedup()
     while True:
-        now = time.time()
-        step = SCAN_EVERY_MIN * 60
-        nxt = (now // step + 1) * step + 20          # next :00/:15/:30/:45 + 20s
-        time.sleep(max(5, nxt - now))
+        now = time.time(); step = SCAN_EVERY_MIN * 60
+        time.sleep(max(5, (now // step + 1) * step + 20 - now))
         if not mt5.terminal_info():
-            log("MT5 disconnected — reconnecting")
-            connect()
+            log("MT5 disconnected — reconnecting"); connect()
+        news = upcoming_news()
         alerts = []
-        for sym in SYMBOLS:
+        for sym, disp, win, is_demo in pairs:
             try:
-                m = check_symbol(sym, offset, dedup)
-                if m:
-                    alerts.append(m)
+                a = check(sym, disp, win, is_demo, offset, dedup, news)
+                if not a:
+                    continue
+                key = "%s:%s:%s" % (a["kind"], sym, a["cts"])
+                if dedup.get(key) == a["dir"]:
+                    continue
+                dedup[key] = a["dir"]
+                alerts.append(a)
             except Exception as e:
                 log("error on %s: %s" % (sym, e))
         if alerts:
             dedup = save_dedup(dedup)
-            header = ("<b>EMA13 Body-Cross Alert</b>\n<i>%d signal(s) on 1H</i>\n" % len(alerts)) + "\u2500" * 25 + "\n\n"
-            send_telegram(header + "\n\n".join(alerts))
+            # triggers first, then setups, cancels last
+            order = {"TRIGGER": 0, "SETUP": 1, "CANCEL": 2}
+            alerts.sort(key=lambda a: order.get(a["kind"], 3))
+            header = ("<b>Full-stack Alert</b>\n<i>%d signal(s) on 1H</i>\n" % len(alerts)) + "\u2500" * 25 + "\n\n"
+            send_telegram(header + "\n\n".join(format_alert(a) for a in alerts))
             log("Sent %d alert(s)" % len(alerts))
         else:
             log("scan complete - no new signals")
