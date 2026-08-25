@@ -52,6 +52,11 @@ NEWS_WINDOW_H      = 3.0         # flag events within +/- this many hours
 DEDUP_FILE         = Path(__file__).with_name("dedup_state.json")
 OPEN_FILE          = Path(__file__).with_name("open_trades.json")
 
+# Show the "RISKY (against EMA62)" caution ONLY on pairs where the 1yr Exness
+# test showed EMA62-alignment IMPROVED PF. On the others (BTC/DOGE/SOL/BNB/
+# indices) counter-trend trades actually win, so the warning is silenced.
+EMA62_WARN = {"XAUUSD", "XAGUSD", "ETHUSD", "XRPUSD", "LINKUSD", "ADAUSD", "HBARUSD"}
+
 # base name -> (display, session windows UTC or None=all-hours)
 LIVE = {
     "XAUUSD": ("XAU/USD", [(0, 21)]),
@@ -63,11 +68,13 @@ LIVE = {
     "DOGEUSD": ("DOGE/USD", [(0, 16), (21, 24)]),
     "LINKUSD": ("LINK/USD", [(7, 21)]),
     "BNBUSD": ("BNB/USD", [(0, 7), (12, 24)]),
+    "ADAUSD": ("ADA/USD", None),     # promoted from demo (1yr Exness PF 1.52)
+    "HBARUSD": ("HBAR/USD", None),   # promoted from demo (1yr Exness PF 1.58)
 }
 DEMO = {
     "USTEC":  ("US100", None), "US500": ("US500", None),
-    "ADAUSD": ("ADA/USD", None), "XLMUSD": ("XLM/USD", None),
-    "ALGOUSD": ("ALGO/USD", None), "HBARUSD": ("HBAR/USD", None),
+    "XLMUSD": ("XLM/USD", None),
+    "ALGOUSD": ("ALGO/USD", None),
     "XMRUSD": ("XMR/USD", None), "SLXUSD": ("SLX/USD", None),
 }
 
@@ -224,7 +231,7 @@ def detect_offset(symbols):
     return Counter(offs).most_common(1)[0][0]
 
 
-def check(sym, disp, win, is_demo, offset, dedup, news, opens):
+def check(sym, disp, win, is_demo, offset, dedup, news, opens, warn_ema62):
     mt5.symbol_select(sym, True)
     rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_H1, 0, CANDLES)
     if rates is None or len(rates) < 80:
@@ -290,7 +297,7 @@ def check(sym, disp, win, is_demo, offset, dedup, news, opens):
                    ((e62[j] > e62[j - 10]) if d == "BUY" else (e62[j] < e62[j - 10])))
         return {"kind": kind, "dir": d, "sym": sym, "disp": disp, "entry": level,
                 "stop": stop, "R": R, "tp": tp, "close": c[j], "hour": hh, "ch": ch,
-                "risky": not aligned,
+                "risky": (not aligned) and warn_ema62,
                 "date": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d"),
                 "session": session_name(hh), "demo": is_demo, "news": news,
                 "cts": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d %H:00")}
@@ -396,11 +403,11 @@ def main():
     pairs = []
     for base, (disp, win) in LIVE.items():
         r = resolve(names, base)
-        if r: pairs.append((r, disp, win, False))
+        if r: pairs.append((r, disp, win, False, base in EMA62_WARN))
         else: log("LIVE symbol not found: %s" % base)
     for base, (disp, win) in DEMO.items():
         r = resolve(names, base)
-        if r: pairs.append((r, disp, win, True))
+        if r: pairs.append((r, disp, win, True, base in EMA62_WARN))
         else: log("demo symbol not on this account (skipped): %s" % base)
     log("Scanning %d symbols (%d live, %d demo)" % (
         len(pairs), sum(1 for p in pairs if not p[3]), sum(1 for p in pairs if p[3])))
@@ -415,9 +422,9 @@ def main():
             log("MT5 disconnected — reconnecting"); connect()
         news = upcoming_news()
         alerts = []
-        for sym, disp, win, is_demo in pairs:
+        for sym, disp, win, is_demo, warn in pairs:
             try:
-                a, ex = check(sym, disp, win, is_demo, offset, dedup, news, opens)
+                a, ex = check(sym, disp, win, is_demo, offset, dedup, news, opens, warn)
                 for x in ex:
                     if not EXIT_ALERTS:
                         continue
