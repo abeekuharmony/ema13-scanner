@@ -46,9 +46,11 @@ CANDLES            = 260
 K_RETEST           = 12          # bars allowed for the pullback
 NEAR_FLIP          = 4           # (legacy) unused since colour is a state, not a flip
 MT_MULT            = 1.5         # Megatrend ATR-band multiplier (colour stickiness; tune to chart)
+EXIT_ALERTS        = True        # send a "colour flipped, consider exiting" alert on open trades
 SWING_LB           = 10
 NEWS_WINDOW_H      = 3.0         # flag events within +/- this many hours
 DEDUP_FILE         = Path(__file__).with_name("dedup_state.json")
+OPEN_FILE          = Path(__file__).with_name("open_trades.json")
 
 # base name -> (display, session windows UTC or None=all-hours)
 LIVE = {
@@ -137,6 +139,22 @@ def save_dedup(d):
     return d
 
 
+def load_open():
+    if OPEN_FILE.exists():
+        try:
+            return json.loads(OPEN_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+
+def save_open(o):
+    try:
+        OPEN_FILE.write_text(json.dumps(o[-500:]), encoding="utf-8")
+    except Exception as e:
+        log("open-trades save failed: %s" % e)
+
+
 def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log("Telegram not configured — alert below:\n" + text); return
@@ -206,20 +224,21 @@ def detect_offset(symbols):
     return Counter(offs).most_common(1)[0][0]
 
 
-def check(sym, disp, win, is_demo, offset, dedup, news):
+def check(sym, disp, win, is_demo, offset, dedup, news, opens):
     mt5.symbol_select(sym, True)
     rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_H1, 0, CANDLES)
     if rates is None or len(rates) < 80:
-        return None
+        return None, []
     df = pd.DataFrame(rates)
     server_now = time.time() + offset * 3600
     df = df[df["time"] + 3600 <= server_now].reset_index(drop=True)   # closed candles only
     n = len(df)
     if n < 75:
-        return None
+        return None, []
     o, h, l, c = (df[x].values for x in ["open", "high", "low", "close"])
     e5 = df["close"].ewm(span=5, adjust=False).mean().values
     e13 = df["close"].ewm(span=13, adjust=False).mean().values
+    e62 = df["close"].ewm(span=62, adjust=False).mean().values
     tr = pd.concat([df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(),
                     (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
     atr = tr.ewm(com=13, adjust=False).mean().values
@@ -264,55 +283,106 @@ def check(sym, disp, win, is_demo, offset, dedup, news):
         R = abs(level - stop)
         tp = level + sign * R * 3.0
         hh = int(hr[j]); ch = (hh + 1) % 24
+        # RISKY = trade is against the higher-timeframe trend (EMA62). Not blocked —
+        # flagged so the user can choose to skip. Backtests: counter-EMA62 trades
+        # are ~half the losers.
+        aligned = (((level > e62[j]) if d == "BUY" else (level < e62[j])) and
+                   ((e62[j] > e62[j - 10]) if d == "BUY" else (e62[j] < e62[j - 10])))
         return {"kind": kind, "dir": d, "sym": sym, "disp": disp, "entry": level,
                 "stop": stop, "R": R, "tp": tp, "close": c[j], "hour": hh, "ch": ch,
+                "risky": not aligned,
                 "date": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d"),
                 "session": session_name(hh), "demo": is_demo, "news": news,
                 "cts": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d %H:00")}
 
-    # SETUP: this closed bar is itself a qualifying cross
+    # ---- manage open trades for this symbol: exit when the Megatrend colour flips ----
+    exits = []
+    kept = []
+    for tr_ in opens:
+        if tr_.get("sym") != sym:
+            kept.append(tr_); continue
+        idx = np.where(utc == tr_["ts"])[0]
+        if len(idx) == 0:
+            if tr_["ts"] >= int(utc[0]):        # entry still ahead of window start -> keep
+                kept.append(tr_)
+            continue                             # else fell out of the 260-bar window -> drop
+        ei = int(idx[0]); lng_ = tr_["dir"] == "BUY"; closed = False; flip_at_j = False
+        for b in range(ei + 1, n):
+            hit = ((l[b] <= tr_["stop"]) if lng_ else (h[b] >= tr_["stop"])) or \
+                  ((h[b] >= tr_["tp"]) if lng_ else (l[b] <= tr_["tp"]))
+            flipped = (not bull[b]) if lng_ else bull[b]
+            if hit:                              # stop/tp reached first -> closed, no exit alert
+                closed = True; break
+            if flipped:                          # colour turned against the trade
+                closed = True; flip_at_j = (b == j); break
+        if not closed:
+            kept.append(tr_); continue
+        if flip_at_j:
+            hh = int(hr[j])
+            exits.append({"kind": "EXIT", "dir": tr_["dir"], "disp": disp, "demo": is_demo,
+                          "close": c[j], "hour": hh, "ch": (hh + 1) % 24,
+                          "date": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d"),
+                          "cts": datetime.fromtimestamp(int(utc[j]), tz=timezone.utc).strftime("%Y-%m-%d %H:00")})
+        # closed by stop/tp or an earlier flip -> just drop (no alert)
+    opens[:] = kept
+
+    # ---- entry signal on the just-closed bar ----
+    sig = None
     d = qualifying_cross(j)
     if d:
-        return build("SETUP", d, e5[j])
-    # TRIGGER / CANCEL: first EMA5 touch (or void) after a recent qualifying cross
-    i = None
-    for t in range(j - 1, max(j - 1 - K_RETEST, 74), -1):
-        if qualifying_cross(t):
-            i = t; d = qualifying_cross(t); break
-    if i is None:
-        return None
-    lng = d == "BUY"
-    for t in range(i + 1, j + 1):
-        colour_ok = bull[t] if lng else (not bull[t])
-        touched = (l[t] <= e5[t]) if lng else (h[t] >= e5[t])
-        crossed_back = (c[t] < e13[t]) if lng else (c[t] > e13[t])
-        if not colour_ok:                       # Megatrend colour flipped away -> invalid
-            return build("CANCEL", d, e5[j]) if t == j else None
-        if touched:
-            return build("TRIGGER", d, e5[j]) if t == j else None
-        if crossed_back:
-            return build("CANCEL", d, e5[j]) if t == j else None
-    return None
+        sig = build("SETUP", d, e5[j])
+    else:
+        i = None
+        for t in range(j - 1, max(j - 1 - K_RETEST, 74), -1):
+            if qualifying_cross(t):
+                i = t; d = qualifying_cross(t); break
+        if i is not None:
+            lng = d == "BUY"
+            for t in range(i + 1, j + 1):
+                colour_ok = bull[t] if lng else (not bull[t])
+                touched = (l[t] <= e5[t]) if lng else (h[t] >= e5[t])
+                crossed_back = (c[t] < e13[t]) if lng else (c[t] > e13[t])
+                if not colour_ok:
+                    if t == j: sig = build("CANCEL", d, e5[j])
+                    break
+                if touched:
+                    if t == j: sig = build("TRIGGER", d, e5[j])
+                    break
+                if crossed_back:
+                    if t == j: sig = build("CANCEL", d, e5[j])
+                    break
+    # register a new open position on a TRIGGER (once per candle)
+    if sig is not None and sig["kind"] == "TRIGGER":
+        if not any(x.get("sym") == sym and x.get("ts") == int(utc[j]) for x in opens):
+            opens.append({"sym": sym, "dir": sig["dir"], "stop": sig["stop"],
+                          "tp": sig["tp"], "ts": int(utc[j]), "disp": disp, "demo": is_demo})
+    return sig, exits
 
 
 def format_alert(a):
     is_buy = a["dir"] == "BUY"
     arrow = "\u25B2 BUY" if is_buy else "\u25BC SELL"
     demo = "\n    \u26A0\uFE0F FORWARD-TEST \u2014 demo account only" if a["demo"] else ""
+    if a["kind"] == "EXIT":
+        return ("\U0001F6AA <b>%s</b>  %s  [Megatrend FLIP \u2014 consider EXIT]%s\n"
+                "    Colour flipped against your %s \u2014 the trend may be over\n"
+                "    Close: %s") % (a["disp"], arrow, demo, a["dir"], fmt(a["close"]))
     news = ("\n    \U0001F4F0 News: %s \u2014 trade with caution" % a["news"]) if a["news"] else ""
+    risky = ("\n    \u26A0\uFE0F RISKY \u2014 against the higher-trend (EMA62); trade with caution or skip"
+             if a.get("risky") else "")
     e, s, t, R = fmt(a["entry"]), fmt(a["stop"]), fmt(a["tp"]), fmt(a["R"])
     cand = "Signal candle (CLOSED): %02d:00\u2192%02d:00 UTC, %s" % (a["hour"], a["ch"], a["date"])
     if a["kind"] == "SETUP":
         emoji = "\U0001F7E2" if is_buy else "\U0001F534"
-        return ("%s\U0001F4CB <b>%s</b>  %s  [Full-stack SETUP \u00B7 1H \u00B7 %s]%s\n"
+        return ("%s\U0001F4CB <b>%s</b>  %s  [Full-stack SETUP \u00B7 1H \u00B7 %s]%s%s\n"
                 "    Cross + Megatrend colour aligned \u2014 watch for EMA5 pullback\n"
                 "    Place limit \u2248 %s  |  Stop %s (swing, R=%s)\n"
-                "    TP (3R): %s\n    %s%s") % (emoji, a["disp"], arrow, a["session"], demo, e, s, R, t, cand, news)
+                "    TP (3R): %s\n    %s%s") % (emoji, a["disp"], arrow, a["session"], demo, risky, e, s, R, t, cand, news)
     if a["kind"] == "TRIGGER":
-        return ("\U0001F3AF <b>%s</b>  %s  [Full-stack ENTRY \u00B7 1H]%s\n"
+        return ("\U0001F3AF <b>%s</b>  %s  [Full-stack ENTRY \u00B7 1H]%s%s\n"
                 "    EMA5 pullback tapped \u2014 entry zone\n"
                 "    Entry %s  |  Stop %s (R=%s)  |  TP(3R) %s\n    %s%s") % (
-                a["disp"], arrow, demo, e, s, R, t, cand, news)
+                a["disp"], arrow, demo, risky, e, s, R, t, cand, news)
     return ("\u274C <b>%s</b>  %s  [Full-stack VOID]%s\n"
             "    Body closed back across EMA13 before the pullback\n    Close: %s") % (
             a["disp"], arrow, demo, fmt(a["close"]))
@@ -337,6 +407,7 @@ def main():
     offset = detect_offset([p[0] for p in pairs]) if pairs else 0
     log("Server offset vs UTC: %+d h" % offset)
     dedup = load_dedup()
+    opens = load_open()
     while True:
         now = time.time(); step = SCAN_EVERY_MIN * 60
         time.sleep(max(5, (now // step + 1) * step + 20 - now))
@@ -346,20 +417,25 @@ def main():
         alerts = []
         for sym, disp, win, is_demo in pairs:
             try:
-                a = check(sym, disp, win, is_demo, offset, dedup, news)
-                if not a:
-                    continue
-                key = "%s:%s:%s" % (a["kind"], sym, a["cts"])
-                if dedup.get(key) == a["dir"]:
-                    continue
-                dedup[key] = a["dir"]
-                alerts.append(a)
+                a, ex = check(sym, disp, win, is_demo, offset, dedup, news, opens)
+                for x in ex:
+                    if not EXIT_ALERTS:
+                        continue
+                    key = "EXIT:%s:%s" % (sym, x["cts"])
+                    if dedup.get(key) == x["dir"]:
+                        continue
+                    dedup[key] = x["dir"]; alerts.append(x)
+                if a:
+                    key = "%s:%s:%s" % (a["kind"], sym, a["cts"])
+                    if dedup.get(key) != a["dir"]:
+                        dedup[key] = a["dir"]; alerts.append(a)
             except Exception as e:
                 log("error on %s: %s" % (sym, e))
+        save_open(opens)
         if alerts:
             dedup = save_dedup(dedup)
-            # triggers first, then setups, cancels last
-            order = {"TRIGGER": 0, "SETUP": 1, "CANCEL": 2}
+            # exits first, then triggers, setups, cancels last
+            order = {"EXIT": 0, "TRIGGER": 1, "SETUP": 2, "CANCEL": 3}
             alerts.sort(key=lambda a: order.get(a["kind"], 3))
             header = ("<b>Full-stack Alert</b>\n<i>%d signal(s) on 1H</i>\n" % len(alerts)) + "\u2500" * 25 + "\n\n"
             send_telegram(header + "\n\n".join(format_alert(a) for a in alerts))
