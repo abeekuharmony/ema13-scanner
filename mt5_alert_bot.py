@@ -44,7 +44,8 @@ FMP_API_KEY        = os.getenv("FMP_API_KEY", "")
 SCAN_EVERY_MIN     = 15
 CANDLES            = 260
 K_RETEST           = 12          # bars allowed for the pullback
-NEAR_FLIP          = 4           # Megatrend flip must be within N bars before the cross
+NEAR_FLIP          = 4           # (legacy) unused since colour is a state, not a flip
+MT_MULT            = 1.5         # Megatrend ATR-band multiplier (colour stickiness; tune to chart)
 SWING_LB           = 10
 NEWS_WINDOW_H      = 3.0         # flag events within +/- this many hours
 DEDUP_FILE         = Path(__file__).with_name("dedup_state.json")
@@ -223,13 +224,24 @@ def check(sym, disp, win, is_demo, offset, dedup, news):
                     (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
     atr = tr.ewm(com=13, adjust=False).mean().values
     jm = jma(((df["high"] + df["low"] + df["close"]) / 3).values)
-    bull = np.ones(n, bool)
+    # Megatrend colour via an ATR band on the JMA (Supertrend-style, sticky).
+    # The old raw-slope colour flipped on trivial JMA wiggles (~0.1pt) and fired
+    # false counter-trend signals; a band ignores wiggles small vs ATR, matching
+    # the chart's steady colour that holds green/red through shallow pullbacks.
+    ub = jm + MT_MULT * atr
+    lb = jm - MT_MULT * atr
+    fub = ub.copy(); flb = lb.copy(); bull = np.ones(n, bool)
     for i in range(1, n):
-        bull[i] = jm[i] > jm[i - 1] if jm[i] != jm[i - 1] else bull[i - 1]
-    fg = np.zeros(n, bool); frd = np.zeros(n, bool)
-    for i in range(1, n):
-        if bull[i] and not bull[i - 1]: fg[i] = True
-        if not bull[i] and bull[i - 1]: frd[i] = True
+        if np.isnan(atr[i]):
+            bull[i] = bull[i - 1]; fub[i] = fub[i - 1]; flb[i] = flb[i - 1]; continue
+        fub[i] = ub[i] if (ub[i] < fub[i - 1] or c[i - 1] > fub[i - 1]) else fub[i - 1]
+        flb[i] = lb[i] if (lb[i] > flb[i - 1] or c[i - 1] < flb[i - 1]) else flb[i - 1]
+        if c[i] > fub[i - 1]:
+            bull[i] = True
+        elif c[i] < flb[i - 1]:
+            bull[i] = False
+        else:
+            bull[i] = bull[i - 1]
     utc = (df["time"].values - offset * 3600)
     hr = ((utc // 3600) % 24).astype(int)
     j = n - 1
@@ -239,9 +251,9 @@ def check(sym, disp, win, is_demo, offset, dedup, news):
             return None
         if not in_window(win, int(hr[t])):
             return None
-        if o[t] < e13[t] and c[t] > e13[t] and fg[max(0, t - NEAR_FLIP):t + 1].any():
+        if o[t] < e13[t] and c[t] > e13[t] and bull[t]:
             return "BUY"
-        if o[t] > e13[t] and c[t] < e13[t] and frd[max(0, t - NEAR_FLIP):t + 1].any():
+        if o[t] > e13[t] and c[t] < e13[t] and not bull[t]:
             return "SELL"
         return None
 
@@ -271,8 +283,11 @@ def check(sym, disp, win, is_demo, offset, dedup, news):
         return None
     lng = d == "BUY"
     for t in range(i + 1, j + 1):
+        colour_ok = bull[t] if lng else (not bull[t])
         touched = (l[t] <= e5[t]) if lng else (h[t] >= e5[t])
         crossed_back = (c[t] < e13[t]) if lng else (c[t] > e13[t])
+        if not colour_ok:                       # Megatrend colour flipped away -> invalid
+            return build("CANCEL", d, e5[j]) if t == j else None
         if touched:
             return build("TRIGGER", d, e5[j]) if t == j else None
         if crossed_back:
@@ -290,7 +305,7 @@ def format_alert(a):
     if a["kind"] == "SETUP":
         emoji = "\U0001F7E2" if is_buy else "\U0001F534"
         return ("%s\U0001F4CB <b>%s</b>  %s  [Full-stack SETUP \u00B7 1H \u00B7 %s]%s\n"
-                "    Cross + Megatrend flip confirmed \u2014 watch for EMA5 pullback\n"
+                "    Cross + Megatrend colour aligned \u2014 watch for EMA5 pullback\n"
                 "    Place limit \u2248 %s  |  Stop %s (swing, R=%s)\n"
                 "    TP (3R): %s\n    %s%s") % (emoji, a["disp"], arrow, a["session"], demo, e, s, R, t, cand, news)
     if a["kind"] == "TRIGGER":
