@@ -1,0 +1,55 @@
+//@version=6
+// Asman Gold 5/13/62 Body Cross — XAUUSD
+// Signal: ANY candle whose BODY crosses the signal EMA (open one side, close the other). No size filter.
+// Each chart shows only its OWN timeframe's signals (M5 on M5, H1 on H1, H4 on H4).
+// Out-of-session signals are still BUY/SELL, marked with a * in the label.
+// Closed candles only => no repaint.
+indicator("Asman Gold Body Cross v7", overlay = true, max_labels_count = 500)
+
+grpE = "EMAs (match these to your 5/13/62 Clouds indicator)"
+lenFast = input.int(5,  "Fast EMA",   minval = 1, group = grpE)
+lenMid  = input.int(13, "Signal EMA", minval = 1, group = grpE)
+lenSlow = input.int(40, "Slow EMA",   minval = 1, group = grpE)
+colFast = input.color(color.purple, "Fast colour",   group = grpE)
+colMid  = input.color(color.yellow, "Signal colour", group = grpE)
+colSlow = input.color(color.green,  "Slow colour",   group = grpE)
+
+grpS = "Session marker (M5 and H1 only)"
+markOOS    = input.bool(true,  "Add * to out-of-session signals (e.g. M5 BUY *)", group = grpS)
+shadeOOS   = input.bool(false, "Faintly shade out-of-session hours", group = grpS)
+sessPreset = input.string("Tight: 00-07 + 12-16", "Session (UTC)", options = ["Tight: 00-07 + 12-16", "Loose: 00-21"], group = grpS)
+
+plot(ta.ema(close, lenFast), "EMA Fast",   colFast)
+plot(ta.ema(close, lenMid),  "EMA Signal", colMid, 2)
+plot(ta.ema(close, lenSlow), "EMA Slow",   colSlow)
+
+tfSec   = timeframe.in_seconds()
+tfLabel = timeframe.period == "5" ? "M5" : timeframe.period == "60" ? "H1" : timeframe.period == "240" ? "H4" : timeframe.period
+conf    = barstate.isconfirmed
+
+inSession(int t) =>
+    h = hour(t, "UTC")
+    sessPreset == "Tight: 00-07 + 12-16" ? (h < 7 or (h >= 12 and h < 16)) : h < 21
+
+m       = ta.ema(close, lenMid)
+buySig  = open < m and close > m and conf
+sellSig = open > m and close < m and conf
+outSess = tfSec < 14400 and not inSession(time)          // H4+ never marked
+star    = markOOS and outSess ? " *" : ""
+oosNote = markOOS and outSess ? " (out of session)" : ""
+
+bgcolor(shadeOOS and outSess ? color.new(#4FC3F7, 93) : na, title = "Out-of-session shading")
+
+if buySig
+    label.new(bar_index, low, tfLabel + " BUY" + star, yloc = yloc.belowbar, style = label.style_label_up,
+              color = #43A047, textcolor = color.white, size = size.small)
+    alert(tfLabel + " BUY" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+if sellSig
+    label.new(bar_index, high, tfLabel + " SELL" + star, yloc = yloc.abovebar, style = label.style_label_down,
+              color = #E53935, textcolor = color.white, size = size.small)
+    alert(tfLabel + " SELL" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+// Alerts: on EACH chart (M5, H1, H4) create one alert with "Any alert() function call".
+// Messages read e.g. "M5 BUY — XAUUSD" or "H1 SELL (out of session) — XAUUSD".
+alertcondition(buySig,  "BUY",  "{{interval}} BUY — {{ticker}}")
+alertcondition(sellSig, "SELL", "{{interval}} SELL — {{ticker}}")
