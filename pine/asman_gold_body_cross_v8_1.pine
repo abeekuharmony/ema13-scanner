@@ -1,0 +1,64 @@
+//@version=6
+// Asman Gold Body Cross v8.1 — XAUUSD — one script, rules switch automatically by chart timeframe:
+//   Below 1 hour (M5 ...)     : body crosses EMA13 AND a volume spike (>= 1.5x avg of previous 20)
+//                               on this candle or the 2 before it.            (no body-size rule)
+//   1 hour and above (H1 ...) : body crosses EMA13 AND volume >= 1.5x avg of previous 20 on THIS candle.
+// EMA 5 / 13 / 62 plotted. Only EMA13 is used for signals (EMA5 and EMA62 are visual only).
+// Out-of-session signals are still BUY/SELL, marked with a * in the label.
+// Closed candles only => no repaint.
+indicator("Asman Gold Body Cross v8.1", overlay = true, max_labels_count = 500)
+
+grpE = "EMAs"
+lenFast = input.int(5,  "Fast EMA",   minval = 1, group = grpE)
+lenMid  = input.int(13, "Signal EMA", minval = 1, group = grpE)
+lenSlow = input.int(62, "Slow EMA",   minval = 1, group = grpE)
+colFast = input.color(color.purple, "Fast colour",   group = grpE)
+colMid  = input.color(color.yellow, "Signal colour", group = grpE)
+colSlow = input.color(color.green,  "Slow colour",   group = grpE)
+
+grpV = "Volume spike"
+rvolMult = input.float(1.5, "Volume spike: at least (x average)", minval = 0.1, step = 0.1, group = grpV)
+rvolLen  = input.int(20, "Average of the previous N candles", minval = 1, group = grpV)
+volLook  = input.int(3, "Below 1 hour: spike on the signal candle or the previous (N-1) candles", minval = 1, group = grpV)
+
+grpS = "Session marker (M5 and H1 only)"
+markOOS    = input.bool(true,  "Add * to out-of-session signals (e.g. M5 BUY *)", group = grpS)
+shadeOOS   = input.bool(false, "Faintly shade out-of-session hours", group = grpS)
+sessPreset = input.string("Tight: 00-07 + 12-16", "Session (UTC)", options = ["Tight: 00-07 + 12-16", "Loose: 00-21"], group = grpS)
+
+plot(ta.ema(close, lenFast), "EMA Fast",   colFast)
+plot(ta.ema(close, lenMid),  "EMA Signal", colMid, 2)
+plot(ta.ema(close, lenSlow), "EMA Slow",   colSlow)
+
+tfSec   = timeframe.in_seconds()
+tfLabel = timeframe.period == "5" ? "M5" : timeframe.period == "60" ? "H1" : timeframe.period == "240" ? "H4" : timeframe.period
+conf    = barstate.isconfirmed
+lowerTF = tfSec < 3600
+
+inSession(int t) =>
+    h = hour(t, "UTC")
+    sessPreset == "Tight: 00-07 + 12-16" ? (h < 7 or (h >= 12 and h < 16)) : h < 21
+
+m        = ta.ema(close, lenMid)
+spike    = volume >= rvolMult * ta.sma(volume, rvolLen)[1]
+spikeN   = math.sum(spike ? 1 : 0, volLook) > 0
+filterOk = lowerTF ? spikeN : spike
+buySig   = open < m and close > m and filterOk and conf
+sellSig  = open > m and close < m and filterOk and conf
+outSess  = tfSec < 14400 and not inSession(time)         // H4+ never marked
+star     = markOOS and outSess ? " *" : ""
+oosNote  = markOOS and outSess ? " (out of session)" : ""
+
+bgcolor(shadeOOS and outSess ? color.new(#4FC3F7, 93) : na, title = "Out-of-session shading")
+
+if buySig
+    label.new(bar_index, low, tfLabel + " BUY" + star, yloc = yloc.belowbar, style = label.style_label_up,
+              color = #43A047, textcolor = color.white, size = size.small)
+    alert(tfLabel + " BUY" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+if sellSig
+    label.new(bar_index, high, tfLabel + " SELL" + star, yloc = yloc.abovebar, style = label.style_label_down,
+              color = #E53935, textcolor = color.white, size = size.small)
+    alert(tfLabel + " SELL" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+alertcondition(buySig,  "BUY",  "{{interval}} BUY — {{ticker}}")
+alertcondition(sellSig, "SELL", "{{interval}} SELL — {{ticker}}")
