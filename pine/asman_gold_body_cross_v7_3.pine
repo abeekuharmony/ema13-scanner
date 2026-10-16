@@ -1,0 +1,79 @@
+//@version=6
+// Asman Gold Body Cross v7.3 — XAUUSD — v7 + Local fractal break (market structure)
+// BUY : candle BODY crosses up through EMA13 AND closes above the most recent fractal (pivot) HIGH
+//       that formed within the last 10 candles.
+// SELL: candle BODY crosses down through EMA13 AND closes below the most recent fractal (pivot) LOW
+//       that formed within the last 10 candles.
+// If no fractal formed in the last 10 candles, there is no structure to break => no signal.
+// Fractal = a candle whose high (low) is beyond the 2 candles either side of it (classic 5-candle fractal).
+// Works on the active chart timeframe (M5, H1, H4 ...) with no settings change.
+// Out-of-session signals are still BUY/SELL, marked with a * in the label.
+// Closed candles only => no repaint.
+indicator("Asman Gold Body Cross v7.3", overlay = true, max_labels_count = 500)
+
+grpE = "EMAs (match these to your 5/13/62 Clouds indicator)"
+lenFast = input.int(5,  "Fast EMA",   minval = 1, group = grpE)
+lenMid  = input.int(13, "Signal EMA", minval = 1, group = grpE)
+lenSlow = input.int(40, "Slow EMA",   minval = 1, group = grpE)
+colFast = input.color(color.purple, "Fast colour",   group = grpE)
+colMid  = input.color(color.yellow, "Signal colour", group = grpE)
+colSlow = input.color(color.green,  "Slow colour",   group = grpE)
+
+grpF = "Fractal break"
+fracSide = input.int(2,  "Fractal: candles each side", minval = 1, group = grpF)
+fracLook = input.int(10, "Fractal must have formed within the last N candles", minval = 1, group = grpF)
+
+grpS = "Session marker (M5 and H1 only)"
+markOOS    = input.bool(true,  "Add * to out-of-session signals (e.g. M5 BUY *)", group = grpS)
+shadeOOS   = input.bool(false, "Faintly shade out-of-session hours", group = grpS)
+sessPreset = input.string("Tight: 00-07 + 12-16", "Session (UTC)", options = ["Tight: 00-07 + 12-16", "Loose: 00-21"], group = grpS)
+
+plot(ta.ema(close, lenFast), "EMA Fast",   colFast)
+plot(ta.ema(close, lenMid),  "EMA Signal", colMid, 2)
+plot(ta.ema(close, lenSlow), "EMA Slow",   colSlow)
+
+tfSec   = timeframe.in_seconds()
+tfLabel = timeframe.period == "5" ? "M5" : timeframe.period == "60" ? "H1" : timeframe.period == "240" ? "H4" : timeframe.period
+conf    = barstate.isconfirmed
+
+inSession(int t) =>
+    h = hour(t, "UTC")
+    sessPreset == "Tight: 00-07 + 12-16" ? (h < 7 or (h >= 12 and h < 16)) : h < 21
+
+// most recent confirmed fractal high / low and the bar it formed on
+ph = ta.pivothigh(high, fracSide, fracSide)
+pl = ta.pivotlow(low,  fracSide, fracSide)
+var float lastPH = na
+var int   lastPHbar = na
+var float lastPL = na
+var int   lastPLbar = na
+if not na(ph)
+    lastPH    := ph
+    lastPHbar := bar_index - fracSide
+if not na(pl)
+    lastPL    := pl
+    lastPLbar := bar_index - fracSide
+
+breakUp = not na(lastPH) and bar_index - lastPHbar <= fracLook and close > lastPH
+breakDn = not na(lastPL) and bar_index - lastPLbar <= fracLook and close < lastPL
+
+m       = ta.ema(close, lenMid)
+buySig  = open < m and close > m and breakUp and conf
+sellSig = open > m and close < m and breakDn and conf
+outSess = tfSec < 14400 and not inSession(time)          // H4+ never marked
+star    = markOOS and outSess ? " *" : ""
+oosNote = markOOS and outSess ? " (out of session)" : ""
+
+bgcolor(shadeOOS and outSess ? color.new(#4FC3F7, 93) : na, title = "Out-of-session shading")
+
+if buySig
+    label.new(bar_index, low, tfLabel + " BUY" + star, yloc = yloc.belowbar, style = label.style_label_up,
+              color = #43A047, textcolor = color.white, size = size.small)
+    alert(tfLabel + " BUY" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+if sellSig
+    label.new(bar_index, high, tfLabel + " SELL" + star, yloc = yloc.abovebar, style = label.style_label_down,
+              color = #E53935, textcolor = color.white, size = size.small)
+    alert(tfLabel + " SELL" + oosNote + " — " + syminfo.ticker, alert.freq_once_per_bar_close)
+
+alertcondition(buySig,  "BUY",  "{{interval}} BUY — {{ticker}}")
+alertcondition(sellSig, "SELL", "{{interval}} SELL — {{ticker}}")
