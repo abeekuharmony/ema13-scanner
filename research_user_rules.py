@@ -128,12 +128,13 @@ def run(label, df):
         a = stats([x[0] for x in t]); b = stats([x[1] for x in t])
         print(f"{name:22} {len(t):6d} {len(t) / days:5.2f} {a[4]:6.1f} | {a[0]:5.2f} {a[1]:+8.3f} {a[2]:+8.1f} {a[3]:+8.1f} | {b[0]:5.2f} {b[1]:+8.3f} {b[2]:+8.1f}")
 
-if not mt5.initialize(path=EXNESS_PATH):
-    raise SystemExit(f"MT5 init failed: {mt5.last_error()}")
-sym = next(s.name for s in mt5.symbols_get() if s.name.upper().startswith("XAUUSD"))
-mt5.symbol_select(sym, True)
-for label, (tf, count) in TFS.items():
-    rates = mt5.copy_rates_from_pos(sym, tf, 1, count)
-    if rates is None or len(rates) < 500: print(f"{label}: no data"); continue
-    run(label, pd.DataFrame(rates))
-mt5.shutdown()
+if __name__ == "__main__":
+    if not mt5.initialize(path=EXNESS_PATH):
+        raise SystemExit(f"MT5 init failed: {mt5.last_error()}")
+    sym = next(s.name for s in mt5.symbols_get() if s.name.upper().startswith("XAUUSD"))
+    mt5.symbol_select(sym, True)
+    for label, (tf, count) in TFS.items():
+        rates = mt5.copy_rates_from_pos(sym, tf, 1, count)
+        if rates is None or len(rates) < 500: print(f"{label}: no data"); continue
+        run(label, pd.DataFrame(rates))
+    mt5.shutdown()
