@@ -1,14 +1,14 @@
 //@version=6
-// Asman Gold Body Cross v7.1 (TMA) — XAUUSD — v7 (EMA 5/13/62) + TMA Centered Bands rules
+// Asman Gold Body Cross v7.1 — XAUUSD — same rules on every timeframe (M5, H1, H4 ...)
 // Signal: candle BODY crosses EMA13 (open one side, close the other) AND:
-//   1) (OFF by default) BUY only if the TMA middle line is GREEN, SELL only if RED
-//   2) invalid if the candle's high-low range covers >= 75% of the TMA channel width
-//   3) BUY only if the candle OPENED BELOW the TMA middle line, SELL only if it OPENED ABOVE it
-// IMPORTANT: uses the TMA values that were LIVE when the candle closed (the right-hand edge of Brylator's
-// TMA v0.42). The solid TMA line you see on history is centred and only known 12 candles later, so it
-// cannot be used for signals without repainting. Same rules on every timeframe.
+//   A) Volume spike: the signal candle's volume >= 1.5x the average volume of the previous 20 candles
+//   B) TMA rule 2: invalid if the candle's high-low range covers >= 75% of the TMA channel width
+//   C) TMA rule 3: BUY only if the candle OPENED BELOW the TMA middle line, SELL only if it OPENED ABOVE it
+// TMA = Brylator "TMA Centered Bands" v0.42 settings (half period 12, Weighted price, ATR 100 x 2),
+// using the values that were LIVE when the candle closed (no repaint). No TMA colour rule.
+// Out-of-session signals are still BUY/SELL, marked with a * in the label.
 // Closed candles only => no repaint.
-indicator("Asman Gold Body Cross v7.1 (TMA)", overlay = true, max_labels_count = 500)
+indicator("Asman Gold Body Cross v7.1", overlay = true, max_labels_count = 500)
 
 grpE = "EMAs"
 lenFast = input.int(5,  "Fast EMA",   minval = 1, group = grpE)
@@ -18,14 +18,15 @@ colFast = input.color(color.purple, "Fast colour",   group = grpE)
 colMid  = input.color(color.yellow, "Signal colour", group = grpE)
 colSlow = input.color(color.green,  "Slow colour",   group = grpE)
 
-grpT = "TMA Centered Bands (match Brylator TMA v0.42 settings)"
+grpV = "Volume spike"
+rvolMult = input.float(1.5, "Volume must be at least (x average)", minval = 0.1, step = 0.1, group = grpV)
+rvolLen  = input.int(20, "Average of the previous N candles", minval = 1, group = grpV)
+
+grpT = "TMA Centered Bands (match your TMA v0.42 settings)"
 tmaHalf  = input.int(12, "Centered TMA half period", minval = 1, group = grpT)
 tmaAtrP  = input.int(100, "ATR period", minval = 1, group = grpT)
 tmaMult  = input.float(2.0, "ATR multiplier", minval = 0.1, step = 0.1, group = grpT)
-useR1    = input.bool(false, "Rule 1: middle line colour must match direction (off: colour repaints)", group = grpT)
-useR2    = input.bool(true, "Rule 2: block candles covering a large part of the channel", group = grpT)
-r2Pct    = input.float(75, "   Block if candle range >= % of channel width", minval = 1, maxval = 200, group = grpT)
-useR3    = input.bool(true, "Rule 3: BUY opens below / SELL opens above the middle line", group = grpT)
+r2Pct    = input.float(75, "Block if candle range >= % of channel width", minval = 1, maxval = 200, group = grpT)
 showLive = input.bool(false, "Show the LIVE TMA middle line used by the rules", group = grpT)
 
 grpS = "Session marker (M5 and H1 only)"
@@ -45,26 +46,19 @@ inSession(int t) =>
     h = hour(t, "UTC")
     sessPreset == "Tight: 00-07 + 12-16" ? (h < 7 or (h >= 12 and h < 16)) : h < 21
 
-// ---- LIVE TMA (right edge of Brylator's indicator: past candles only) ----
+// ---- live TMA (right edge of the TMA Centered Bands: past candles only) ----
 tmaPrice = (high + low + 2 * close) / 4                       // "Weighted" price
-S1       = (tmaHalf + 1) * (tmaHalf + 2) / 2                  // sum of weights 1..H+1
-tmaMid   = ta.wma(tmaPrice, tmaHalf + 1)                      // weights H+1 (newest) .. 1
-asym1    = (tmaMid[1] * S1 + tmaHalf * tmaPrice) / (S1 + tmaHalf)   // previous candle re-estimated with 1 newer candle
-var bool tmaUp = true
-if tmaMid > asym1
-    tmaUp := true
-else if tmaMid < asym1
-    tmaUp := false
+tmaMid   = ta.wma(tmaPrice, tmaHalf + 1)
 tr2      = math.max(high, nz(close[1], close)) - math.min(low, nz(close[1], close))
-tmaAtr   = ta.sma(tr2, tmaAtrP)[10]
-chanW    = 2 * tmaMult * tmaAtr                               // upper band - lower band
-plot(showLive ? tmaMid : na, "Live TMA mid", tmaUp ? color.new(color.green, 30) : color.new(color.red, 30), 1)
+chanW    = 2 * tmaMult * ta.sma(tr2, tmaAtrP)[10]             // upper band - lower band
+plot(showLive ? tmaMid : na, "Live TMA mid", color.new(color.gray, 30), 1)
 
-r2ok = not useR2 or (high - low) < r2Pct / 100 * chanW
+volOk  = volume >= rvolMult * ta.sma(volume, rvolLen)[1]
+rangeOk = (high - low) < r2Pct / 100 * chanW
 
 m       = ta.ema(close, lenMid)
-buySig  = open < m and close > m and (not useR1 or tmaUp)     and r2ok and (not useR3 or open < tmaMid) and conf
-sellSig = open > m and close < m and (not useR1 or not tmaUp) and r2ok and (not useR3 or open > tmaMid) and conf
+buySig  = open < m and close > m and volOk and rangeOk and open < tmaMid and conf
+sellSig = open > m and close < m and volOk and rangeOk and open > tmaMid and conf
 outSess = tfSec < 14400 and not inSession(time)               // H4+ never marked
 star    = markOOS and outSess ? " *" : ""
 oosNote = markOOS and outSess ? " (out of session)" : ""
