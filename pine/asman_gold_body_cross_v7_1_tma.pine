@@ -1,7 +1,7 @@
 //@version=6
 // Asman Gold Body Cross v7.1 — XAUUSD — same rules on every timeframe (M5, H1, H4 ...)
 // Signal: candle BODY crosses EMA13 (open one side, close the other) AND:
-//   A) Volume spike: the signal candle's volume >= 1.5x the average volume of the previous 20 candles
+//   A) Volume spike: the signal candle's volume >= 1.2x the average volume of the previous 20 candles
 //   B) TMA rule 2: invalid if the candle's high-low range covers >= 75% of the TMA channel width
 //   C) TMA rule 3: BUY only if the candle OPENED BELOW the TMA middle line, SELL only if it OPENED ABOVE it
 // TMA = Brylator "TMA Centered Bands" v0.42 settings (half period 12, Weighted price, ATR 100 x 2),
@@ -19,7 +19,7 @@ colMid  = input.color(color.yellow, "Signal colour", group = grpE)
 colSlow = input.color(color.green,  "Slow colour",   group = grpE)
 
 grpV = "Volume spike"
-rvolMult = input.float(1.5, "Volume must be at least (x average)", minval = 0.1, step = 0.1, group = grpV)
+rvolMult = input.float(1.2, "Volume must be at least (x average)", minval = 0.1, step = 0.1, group = grpV)
 rvolLen  = input.int(20, "Average of the previous N candles", minval = 1, group = grpV)
 
 grpT = "TMA Centered Bands (match your TMA v0.42 settings)"
