@@ -1,7 +1,7 @@
 //@version=6
 // Asman Gold Body Cross v7.1 (TMA) — XAUUSD — v7 (EMA 5/13/62) + TMA Centered Bands rules
 // Signal: candle BODY crosses EMA13 (open one side, close the other) AND:
-//   1) BUY only if the TMA middle line is GREEN (rising), SELL only if RED (falling)
+//   1) (OFF by default) BUY only if the TMA middle line is GREEN, SELL only if RED
 //   2) invalid if the candle's high-low range covers >= 75% of the TMA channel width
 //   3) BUY only if the candle OPENED BELOW the TMA middle line, SELL only if it OPENED ABOVE it
 // IMPORTANT: uses the TMA values that were LIVE when the candle closed (the right-hand edge of Brylator's
@@ -22,7 +22,7 @@ grpT = "TMA Centered Bands (match Brylator TMA v0.42 settings)"
 tmaHalf  = input.int(12, "Centered TMA half period", minval = 1, group = grpT)
 tmaAtrP  = input.int(100, "ATR period", minval = 1, group = grpT)
 tmaMult  = input.float(2.0, "ATR multiplier", minval = 0.1, step = 0.1, group = grpT)
-useR1    = input.bool(true, "Rule 1: middle line colour must match direction", group = grpT)
+useR1    = input.bool(false, "Rule 1: middle line colour must match direction (off: colour repaints)", group = grpT)
 useR2    = input.bool(true, "Rule 2: block candles covering a large part of the channel", group = grpT)
 r2Pct    = input.float(75, "   Block if candle range >= % of channel width", minval = 1, maxval = 200, group = grpT)
 useR3    = input.bool(true, "Rule 3: BUY opens below / SELL opens above the middle line", group = grpT)
